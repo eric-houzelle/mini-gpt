@@ -64,7 +64,8 @@ cd mini-gpt`
 
 ```python -m venv venv
 source venv/bin/activate   # On macOS/Linux
-venv\Scripts\activate      # On Windows```
+venv\Scripts\activate      # On Windows
+```
 
 ### 3\. Install dependencies
 
@@ -80,7 +81,8 @@ venv\Scripts\activate      # On Windows```
 Defines model and training hyperparameters.\
 Example:
 
-```{
+```
+{
   "training": {
     "num_epochs": 10,
     "batch_size": 32,
@@ -97,15 +99,18 @@ Example:
     "max_texts": 10000,
     "train_split_ratio": 0.9
   }
-}```
+}
+```
 
 ### `.env`
 
 Specifies runtime environment variables.
 
-```DATASET_NAME=iproskurina/TinyStories-French
+```
+DATASET_NAME=iproskurina/TinyStories-French
 TOKENIZER_NAME=camembert-base
-MODEL_SAVE_PATH=checkpoints/best_miniGPT.pt```
+MODEL_SAVE_PATH=checkpoints/best_miniGPT.pt
+```
 
 * * * * *
 
