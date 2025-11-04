@@ -1,0 +1,114 @@
+import os
+import json
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from transformers import CamembertTokenizer
+from datasets import load_dataset
+from torch.optim.lr_scheduler import OneCycleLR
+from dataset.text_dataset import TextDataset
+from model.model import MiniGPT
+from torch.nn.utils.rnn import pad_sequence
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CONFIG_PATH = "config.json"
+with open(CONFIG_PATH, "r") as f:
+    config = json.load(f)
+
+DATASET_NAME = os.getenv("DATASET_NAME", "iproskurina/TinyStories-French")
+TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
+MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
+
+num_epochs = config["training"]["num_epochs"]
+batch_size = config["training"]["batch_size"]
+learning_rate = config["training"]["learning_rate"]
+scheduler_max_lr = config["training"]["scheduler_max_lr"]
+
+embed_dim = config["model"]["embed_dim"]
+depth = config["model"]["depth"]
+heads = config["model"]["heads"]
+block_size = config["model"]["block_size"]
+
+max_texts = config["data"]["max_texts"]
+train_split_ratio = config["data"]["train_split_ratio"]
+
+tokenizer = CamembertTokenizer.from_pretrained(TOKENIZER_NAME)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+
+dataset = load_dataset(DATASET_NAME)
+texts = dataset["train"]["french-tinystories"][:max_texts]
+
+split = int(train_split_ratio * len(texts))
+train_ds = TextDataset(texts[:split], tokenizer, block_size)
+val_ds   = TextDataset(texts[split:], tokenizer, block_size)
+
+def collate_fn(batch):
+    xs, ys = zip(*batch)
+    xs = pad_sequence(xs, batch_first=True, padding_value=tokenizer.pad_token_id)
+    ys = pad_sequence(ys, batch_first=True, padding_value=tokenizer.pad_token_id)
+    return xs, ys
+
+train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = MiniGPT(len(tokenizer), block_size, embed_dim=embed_dim, depth=depth, heads=heads).to(device)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+
+total_steps = num_epochs * len(train_loader)
+scheduler = OneCycleLR(optimizer, max_lr=scheduler_max_lr, total_steps=total_steps)
+
+best_loss = float("inf")
+
+if os.path.exists(MODEL_SAVE_PATH):
+    print(f"🔄 Chargement du modèle existant : {MODEL_SAVE_PATH}")
+    model.load_state_dict(torch.load(MODEL_SAVE_PATH))
+else:
+    os.makedirs(os.path.dirname(MODEL_SAVE_PATH), exist_ok=True)
+
+
+for epoch in range(num_epochs):
+    print(f"\n=== Epoch {epoch+1}/{num_epochs} ===")
+    model.train()
+    for i, (xb, yb) in enumerate(train_loader):
+        xb, yb = xb.to(device), yb.to(device)
+        logits = model(xb)
+        B, T, C = logits.shape
+        loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+
+        if i % 100 == 0:
+            print(f"[Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
+
+
+    model.eval()
+    val_loss = 0
+    with torch.no_grad():
+        for xb, yb in val_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            logits = model(xb)
+            B, T, C = logits.shape
+            val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
+    val_loss /= len(val_loader)
+    print(f"Validation loss: {val_loss:.4f}")
+
+
+    if val_loss < best_loss:
+        best_loss = val_loss
+        torch.save(model.state_dict(), MODEL_SAVE_PATH)
+        print(f"✅ Nouveau meilleur modèle sauvegardé ({MODEL_SAVE_PATH})")
+
+
+    context = torch.zeros((1,1), dtype=torch.long, device=device)
+    out = model.generate(context, max_new_tokens=50)[0].tolist()
+    print("Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
