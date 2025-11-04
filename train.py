@@ -1,6 +1,7 @@
 import os
 import json
 import torch
+from datetime import datetime
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import CamembertTokenizer
@@ -48,6 +49,9 @@ texts = dataset["train"][DATASET_KEY][:max_texts]
 split = int(train_split_ratio * len(texts))
 train_ds = TextDataset(texts[:split], tokenizer, block_size)
 val_ds   = TextDataset(texts[split:], tokenizer, block_size)
+
+def now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def collate_fn(batch):
     xs, ys = zip(*batch)
@@ -97,7 +101,7 @@ else:
 #scaler = torch.amp.GradScaler("cuda")
 #model = torch.compile(model)
 for epoch in range(num_epochs):
-    print(f"\n=== Epoch {epoch+1}/{num_epochs} ===")
+    print(f"\n[{now()}] === Epoch {epoch+1}/{num_epochs} ===")
     model.train()
     for i, (xb, yb) in enumerate(train_loader):
         xb, yb = xb.to(device), yb.to(device)
@@ -121,19 +125,20 @@ for epoch in range(num_epochs):
         scheduler.step()
 
         if i % 100 == 0:
-            print(f"[Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
+            print(f"[{now()}] [Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
+            if loss.item() < best_loss:
+                best_loss = loss.item()
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'epoch': epoch,
+                    'loss': loss.item()
+                }, MODEL_SAVE_PATH)
+                print(f"[{now()}] New best model saved!")
+
 
             
-        if loss.item() < best_loss:
-            best_loss = loss.item()
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'epoch': epoch,
-                'loss': loss.item()
-            }, MODEL_SAVE_PATH)
-            print(f"New best model saved!")
-
+        
 
     if epoch % 20 == 0:
         model.eval()
@@ -145,7 +150,7 @@ for epoch in range(num_epochs):
                 B, T, C = logits.shape
                 val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
         val_loss /= len(val_loader)
-        print(f"Validation loss: {val_loss:.4f}")
+        print(f"[{now()}] Validation loss: {val_loss:.4f}")
     
     
     os.makedirs("checkpoints", exist_ok=True)
@@ -156,10 +161,10 @@ for epoch in range(num_epochs):
         'epoch': epoch,
         'loss': val_loss
     }, checkpoint_path)
-    print(f"💾 Model saved at epoch {epoch+1} → {checkpoint_path}")
+    print(f"[{now()}] Model saved at epoch {epoch+1} → {checkpoint_path}")
 
     
     model.eval()
     context = torch.zeros((1,1), dtype=torch.long, device=device)
     out = model.generate(context, max_new_tokens=50)[0].tolist()
-    print("Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
+    print("[{now()}] Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
