@@ -98,31 +98,31 @@ if os.path.exists(MODEL_SAVE_PATH):
 else:
     os.makedirs(os.path.dirname(MODEL_SAVE_PATH), exist_ok=True)
 
-#scaler = torch.amp.GradScaler("cuda")
-#model = torch.compile(model)
+scaler = torch.amp.GradScaler("cuda")
+model = torch.compile(model)
 for epoch in range(num_epochs):
     print(f"\n[{now()}] === Epoch {epoch+1}/{num_epochs} ===")
     model.train()
     for i, (xb, yb) in enumerate(train_loader):
         xb, yb = xb.to(device), yb.to(device)
-        logits = model(xb)
-        B, T, C = logits.shape
-        loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
+        # logits = model(xb)
+        # B, T, C = logits.shape
+        # loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
         optimizer.zero_grad()
-        # with torch.amp.autocast("cuda"):
-        #     logits = model(xb)
-        #     B, T, C = logits.shape
-        #     loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
+        with torch.amp.autocast("cuda"):
+            logits = model(xb)
+            B, T, C = logits.shape
+            loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
 
-        #scaler.scale(loss).backward()
-        #scaler.step(optimizer)
-        #scaler.update()
-        #scheduler.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        scheduler.step()
         
         ## without amp scaler
-        loss.backward() 
-        optimizer.step()
-        scheduler.step()
+        # loss.backward() 
+        # optimizer.step()
+        # scheduler.step()
 
         if i % 100 == 0:
             print(f"[{now()}] [Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
@@ -136,10 +136,6 @@ for epoch in range(num_epochs):
                 }, MODEL_SAVE_PATH)
                 print(f"[{now()}] New best model saved!")
 
-
-            
-        
-
     if epoch % 20 == 0:
         model.eval()
         val_loss = 0
@@ -151,20 +147,10 @@ for epoch in range(num_epochs):
                 val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
         val_loss /= len(val_loader)
         print(f"[{now()}] Validation loss: {val_loss:.4f}")
-    
-    
-    os.makedirs("checkpoints", exist_ok=True)
-    checkpoint_path = f"checkpoints/model_epoch{epoch+1}.pt"
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'epoch': epoch,
-        'loss': val_loss
-    }, checkpoint_path)
-    print(f"[{now()}] Model saved at epoch {epoch+1} → {checkpoint_path}")
+
 
     
     model.eval()
     context = torch.zeros((1,1), dtype=torch.long, device=device)
     out = model.generate(context, max_new_tokens=50)[0].tolist()
-    print("[{now()}] Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
+    print(f"[{now()}] Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
