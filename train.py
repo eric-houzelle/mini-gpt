@@ -110,14 +110,16 @@ for epoch in range(num_epochs):
 
         if i % 100 == 0:
             print(f"[Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
-            os.makedirs("checkpoints", exist_ok=True)
-            checkpoint_path = f"checkpoints/model_epoch{epoch+1}_step{i}.pt"
-            torch.save(model.state_dict(), checkpoint_path)
-            print(f"💾 Model saved at step {i} → {checkpoint_path}")
+
             
         if loss.item() < best_loss:
             best_loss = loss.item()
-            torch.save(model.state_dict(), MODEL_SAVE_PATH)
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'epoch': epoch,
+                'loss': loss.item()
+            }, MODEL_SAVE_PATH)
 
 
 
@@ -131,13 +133,18 @@ for epoch in range(num_epochs):
             val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
     val_loss /= len(val_loader)
     print(f"Validation loss: {val_loss:.4f}")
+    
+    os.makedirs("checkpoints", exist_ok=True)
+    checkpoint_path = f"checkpoints/model_epoch{epoch+1}.pt"
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'epoch': epoch,
+        'loss': val_loss
+    }, checkpoint_path)
+    print(f"💾 Model saved at epoch {epoch+1} → {checkpoint_path}")
 
-
-    if val_loss < best_loss:
-        best_loss = val_loss
-        torch.save(model.state_dict(), MODEL_SAVE_PATH)
-        print(f"✅ Nouveau meilleur modèle sauvegardé ({MODEL_SAVE_PATH})")
-
+    
 
     context = torch.zeros((1,1), dtype=torch.long, device=device)
     out = model.generate(context, max_new_tokens=50)[0].tolist()
