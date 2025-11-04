@@ -45,7 +45,8 @@ Key features:
 ├── dataset/
 │   └── text_dataset.py      # Dataset wrapper and tokenization logic
 │
-└── checkpoints/             # Saved model weights```
+└── checkpoints/             # Saved model weights
+```
 
 * * * * *
 
