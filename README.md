@@ -1,7 +1,7 @@
-Mini-GPT Transformer (French TinyStories)
+Mini-GPT Transformer
 =========================================
 
-Mini-GPT is a lightweight GPT-style Transformer language model trained from scratch in **PyTorch** on the **French TinyStories** dataset.\
+Mini-GPT is a lightweight GPT-style Transformer language model trained from scratch in **PyTorch** .\
 It includes a complete and modular training pipeline with configurable hyperparameters, environment variables, and text generation.
 
 * * * * *
