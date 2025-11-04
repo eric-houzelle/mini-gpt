@@ -94,28 +94,31 @@ if os.path.exists(MODEL_SAVE_PATH):
 else:
     os.makedirs(os.path.dirname(MODEL_SAVE_PATH), exist_ok=True)
 
-scaler = torch.amp.GradScaler("cuda")
-model = torch.compile(model)
+#scaler = torch.amp.GradScaler("cuda")
+#model = torch.compile(model)
 for epoch in range(num_epochs):
     print(f"\n=== Epoch {epoch+1}/{num_epochs} ===")
     model.train()
     for i, (xb, yb) in enumerate(train_loader):
         xb, yb = xb.to(device), yb.to(device)
+        logits = model(xb)
+        B, T, C = logits.shape
+        loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
         optimizer.zero_grad()
-        with torch.amp.autocast("cuda"):
-            logits = model(xb)
-            B, T, C = logits.shape
-            loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
+        # with torch.amp.autocast("cuda"):
+        #     logits = model(xb)
+        #     B, T, C = logits.shape
+        #     loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
 
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        scheduler.step()
+        #scaler.scale(loss).backward()
+        #scaler.step(optimizer)
+        #scaler.update()
+        #scheduler.step()
         
         ## without amp scaler
-        # loss.backward() 
-        # optimizer.step()
-        # scheduler.step()
+        loss.backward() 
+        optimizer.step()
+        scheduler.step()
 
         if i % 100 == 0:
             print(f"[Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
