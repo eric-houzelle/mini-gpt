@@ -18,6 +18,7 @@ with open(CONFIG_PATH, "r") as f:
     config = json.load(f)
 
 DATASET_NAME = os.getenv("DATASET_NAME", "iproskurina/TinyStories-French")
+DATASET_KEY = os.getenv("DATASET_KEY", "french-tinystories")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
 
@@ -41,7 +42,7 @@ if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
 dataset = load_dataset(DATASET_NAME)
-texts = dataset["train"]["french-tinystories"][:max_texts]
+texts = dataset["train"][DATASET_KEY][:max_texts]
 
 split = int(train_split_ratio * len(texts))
 train_ds = TextDataset(texts[:split], tokenizer, block_size)
@@ -59,6 +60,24 @@ val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = MiniGPT(len(tokenizer), block_size, embed_dim=embed_dim, depth=depth, heads=heads, dropout=dropout, hidden_dim= hidden_dim).to(device)
+
+total_params = sum(p.numel() for p in model.parameters())
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def human_readable(num):
+    if num >= 1e9:
+        return f"{num/1e9:.2f}B"
+    elif num >= 1e6:
+        return f"{num/1e6:.2f}M"
+    elif num >= 1e3:
+        return f"{num/1e3:.2f}K"
+    return str(num)
+
+print(f"\nModel initialized with:")
+print(f" - {human_readable(total_params)} total parameters")
+print(f" - {human_readable(trainable_params)} trainable parameters")
+
+
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
@@ -92,6 +111,17 @@ for epoch in range(num_epochs):
         if i % 100 == 0:
             print(f"[Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
 
+        if i % 5 == 0:
+            os.makedirs("checkpoints", exist_ok=True)
+            checkpoint_path = f"checkpoints/model_epoch{epoch+1}_step{i}.pt"
+            torch.save(model.state_dict(), checkpoint_path)
+            print(f"💾 Model saved at step {i} → {checkpoint_path}")
+
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+            torch.save(model.state_dict(), MODEL_SAVE_PATH)
+            print(f"🏆 New best model saved ({MODEL_SAVE_PATH}) — loss={best_loss:.4f}")
+
 
     model.eval()
     val_loss = 0
@@ -104,11 +134,6 @@ for epoch in range(num_epochs):
     val_loss /= len(val_loader)
     print(f"Validation loss: {val_loss:.4f}")
 
-
-    if val_loss < best_loss:
-        best_loss = val_loss
-        torch.save(model.state_dict(), MODEL_SAVE_PATH)
-        print(f"✅ Nouveau meilleur modèle sauvegardé ({MODEL_SAVE_PATH})")
 
 
     context = torch.zeros((1,1), dtype=torch.long, device=device)

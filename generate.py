@@ -30,8 +30,11 @@ block_size = config["model"]["block_size"]
 embed_dim = config["model"]["embed_dim"]
 depth = config["model"]["depth"]
 heads = config["model"]["heads"]
+dropout = config["model"]["dropout"]
+hidden_dim = config["model"]["hidden_dim"]
 
-model = MiniGPT(vocab_size, block_size, embed_dim=embed_dim, depth=depth, heads=heads).to(device)
+model = MiniGPT(len(tokenizer), block_size, embed_dim=embed_dim, depth=depth, heads=heads, dropout=dropout, hidden_dim= hidden_dim).to(device)
+
 
 if os.path.exists(MODEL_SAVE_PATH):
     model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location=device))
