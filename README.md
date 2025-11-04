@@ -32,7 +32,7 @@ Key features:
 ⚙️ Project Structure
 --------------------
 
-`mini-gpt/
+```mini-gpt/
 │
 ├── train.py                 # Training script
 ├── generate.py              # Text generation script
@@ -45,7 +45,7 @@ Key features:
 ├── dataset/
 │   └── text_dataset.py      # Dataset wrapper and tokenization logic
 │
-└── checkpoints/             # Saved model weights`
+└── checkpoints/             # Saved model weights```
 
 * * * * *
 
@@ -61,15 +61,11 @@ cd mini-gpt`
 
 ### 2\. (Optional) Create a virtual environment
 
-`python -m venv venv
+```python -m venv venv
 source venv/bin/activate   # On macOS/Linux
-venv\Scripts\activate      # On Windows`
+venv\Scripts\activate      # On Windows```
 
 ### 3\. Install dependencies
-
-`pip install torch torchvision torchaudio transformers datasets python-dotenv`
-
-Or, if you have a `requirements.txt` file:
 
 `pip install -r requirements.txt`
 
@@ -83,7 +79,7 @@ Or, if you have a `requirements.txt` file:
 Defines model and training hyperparameters.\
 Example:
 
-`{
+```{
   "training": {
     "num_epochs": 10,
     "batch_size": 32,
@@ -100,15 +96,15 @@ Example:
     "max_texts": 10000,
     "train_split_ratio": 0.9
   }
-}`
+}```
 
 ### `.env`
 
 Specifies runtime environment variables.
 
-`DATASET_NAME=iproskurina/TinyStories-French
+```DATASET_NAME=iproskurina/TinyStories-French
 TOKENIZER_NAME=camembert-base
-MODEL_SAVE_PATH=checkpoints/best_miniGPT.pt`
+MODEL_SAVE_PATH=checkpoints/best_miniGPT.pt```
 
 * * * * *
 
