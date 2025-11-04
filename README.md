@@ -136,7 +136,9 @@ During training:
 
 Once training is complete (or if you already have a checkpoint), run:
 
-`python generate.py --prompt "Il était une fois un petit robot curieux" --tokens 100`
+```
+python generate.py --prompt "Il était une fois un petit robot curieux" --tokens 100
+```
 
 This will:
 
@@ -156,14 +158,18 @@ This will:
 You can also run everything directly in Google Colab.\
 Example Colab snippet:
 
-`!git clone https://github.com/eric-houzelle/mini-gpt.git
+```
+!git clone https://github.com/eric-houzelle/mini-gpt.git
 %cd mini-gpt
 !pip install torch torchvision torchaudio transformers datasets python-dotenv
-!python train.py`
+!python train.py
+```
 
 Or to generate text after training:
 
-`!python generate.py --prompt "Il était une fois" --tokens 120`
+```
+!python generate.py --prompt "Il était une fois" --tokens 120
+```
 
 * * * * *
 
