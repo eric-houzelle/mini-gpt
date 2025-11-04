@@ -176,5 +176,5 @@ Or to generate text after training:
 📄 License
 ----------
 
-This project is released under the MIT License.\
+This project is released under the Apache 2.0 License.\
 You are free to use, modify, and distribute it for educational or research purposes.
