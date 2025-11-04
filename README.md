@@ -91,9 +91,11 @@ Example:
   },
   "model": {
     "embed_dim": 256,
-    "depth": 8,
-    "heads": 8,
-    "block_size": 128
+    "depth": 16,
+    "heads": 16,
+    "block_size": 256,
+    "dropout": 0.1,
+    "hidden_dim": 512
   },
   "data": {
     "max_texts": 10000,

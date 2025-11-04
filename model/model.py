@@ -18,7 +18,7 @@ class SelfAttention(nn.Module):
         qkv = self.qkv(x).reshape(B, T, 3, self.heads, self.head_dim).permute(2,0,3,1,4)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        scores = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5)  # (B, heads, T, T)
+        scores = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5) 
         if mask is not None:
             scores = scores.masked_fill(mask == 0, float('-inf'))
         weights = F.softmax(scores, dim=-1)
@@ -27,14 +27,14 @@ class SelfAttention(nn.Module):
         return self.out(attn)
 
 class TransformerBlock(nn.Module):
-    def __init__(self, embed_dim, heads, dropout=0.1):
+    def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim = 512):
         super().__init__()
         self.attn = SelfAttention(embed_dim, heads)
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ff = nn.Sequential(
-            nn.Linear(embed_dim, 4 * embed_dim),
+            nn.Linear(embed_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(4 * embed_dim, embed_dim),
+            nn.Linear(hidden_dim, embed_dim),
         )
         self.ln2 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
@@ -45,11 +45,11 @@ class TransformerBlock(nn.Module):
         return x
 
 class MiniGPT(nn.Module):
-    def __init__(self, vocab_size, block_size, embed_dim=256, depth=8, heads=8):
+    def __init__(self, vocab_size, block_size, embed_dim=256, depth=8, heads=8, dropout = 0.1, hidden_dim = 512):
         super().__init__()
         self.token_emb = nn.Embedding(vocab_size, embed_dim)
         self.pos_emb = nn.Embedding(block_size, embed_dim)
-        self.blocks = nn.ModuleList([TransformerBlock(embed_dim, heads) for _ in range(depth)])
+        self.blocks = nn.ModuleList([TransformerBlock(embed_dim, heads, dropout, hidden_dim) for _ in range(depth)])
         self.ln_f = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, vocab_size)
         self.block_size = block_size

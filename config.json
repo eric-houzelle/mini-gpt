@@ -1,15 +1,17 @@
 {
   "training": {
-    "num_epochs": 10,
+    "num_epochs": 150,
     "batch_size": 32,
-    "learning_rate": 0.0003,
-    "scheduler_max_lr": 0.0003
+    "learning_rate": 1e-4,
+    "scheduler_max_lr": 1e-4
   },
   "model": {
     "embed_dim": 256,
-    "depth": 8,
-    "heads": 8,
-    "block_size": 128
+    "depth": 16,
+    "heads": 16,
+    "block_size": 128,
+    "dropout": 0.1,
+    "hidden_dim": 512
   },
   "data": {
     "max_texts": 10000,

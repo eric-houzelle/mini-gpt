@@ -30,6 +30,8 @@ embed_dim = config["model"]["embed_dim"]
 depth = config["model"]["depth"]
 heads = config["model"]["heads"]
 block_size = config["model"]["block_size"]
+dropout = config["model"]["dropout"]
+hidden_dim = config["model"]["hidden_dim"]
 
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
@@ -56,7 +58,7 @@ val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = MiniGPT(len(tokenizer), block_size, embed_dim=embed_dim, depth=depth, heads=heads).to(device)
+model = MiniGPT(len(tokenizer), block_size, embed_dim=embed_dim, depth=depth, heads=heads, dropout=dropout, hidden_dim= hidden_dim).to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
