@@ -132,6 +132,7 @@ for epoch in range(num_epochs):
                 'epoch': epoch,
                 'loss': loss.item()
             }, MODEL_SAVE_PATH)
+            print(f"New best model saved!")
 
 
     if epoch % 20 == 0:
