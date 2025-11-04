@@ -41,6 +41,7 @@ tokenizer = CamembertTokenizer.from_pretrained(TOKENIZER_NAME)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
+print(f"LOAD DATASET: {DATASET_NAME}")
 dataset = load_dataset(DATASET_NAME)
 texts = dataset["train"][DATASET_KEY][:max_texts]
 
@@ -130,17 +131,18 @@ for epoch in range(num_epochs):
             }, MODEL_SAVE_PATH)
 
 
-
-    model.eval()
-    val_loss = 0
-    with torch.no_grad():
-        for xb, yb in val_loader:
-            xb, yb = xb.to(device), yb.to(device)
-            logits = model(xb)
-            B, T, C = logits.shape
-            val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
-    val_loss /= len(val_loader)
-    print(f"Validation loss: {val_loss:.4f}")
+    if epoch % 20 == 0:
+        model.eval()
+        val_loss = 0
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                logits = model(xb)
+                B, T, C = logits.shape
+                val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
+        val_loss /= len(val_loader)
+        print(f"Validation loss: {val_loss:.4f}")
+    
     
     os.makedirs("checkpoints", exist_ok=True)
     checkpoint_path = f"checkpoints/model_epoch{epoch+1}.pt"
@@ -153,7 +155,7 @@ for epoch in range(num_epochs):
     print(f"💾 Model saved at epoch {epoch+1} → {checkpoint_path}")
 
     
-
+    model.eval()
     context = torch.zeros((1,1), dtype=torch.long, device=device)
     out = model.generate(context, max_new_tokens=50)[0].tolist()
     print("Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
