@@ -1,4 +1,5 @@
 from torch.utils.data import Dataset
+import torch
 
 class TextDataset(Dataset):
     def __init__(self, texts, tokenizer, block_size):
