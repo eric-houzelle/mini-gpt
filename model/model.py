@@ -11,23 +11,28 @@ class SelfAttention(nn.Module):
         self.embed_dim = embed_dim
         self.heads = heads
         self.head_dim = embed_dim // heads
-        self.qkv = nn.Linear(embed_dim, embed_dim * 3)
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
         self.out = nn.Linear(embed_dim, embed_dim)
         self.attn_dropout = dropout 
+        self.resid_dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask=None):
         B, T, C = x.size()
-        qkv = self.qkv(x).reshape(B, T, 3, self.heads, self.head_dim).permute(2,0,3,1,4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
+        q = self.q_proj(x).reshape(B, T, self.heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).reshape(B, T, self.heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).reshape(B, T, self.heads, self.head_dim).transpose(1, 2)
+        
 
         attn = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=None,
-            is_causal=True,                               # ← clé
+            is_causal=True,
             dropout_p=self.attn_dropout if self.training else 0.0,
         )
         attn = attn.transpose(1, 2).contiguous().view(B, T, C)
-        return self.out(attn)
+        return self.resid_dropout(self.out(attn))
 
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim = 512):
