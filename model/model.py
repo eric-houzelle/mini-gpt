@@ -20,13 +20,12 @@ class SelfAttention(nn.Module):
         qkv = self.qkv(x).reshape(B, T, 3, self.heads, self.head_dim).permute(2,0,3,1,4)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        attn_mask = (mask == 0) 
         attn = F.scaled_dot_product_attention(
             q, k, v,
-            attn_mask=attn_mask,
-            is_causal=False,
+            attn_mask=None,
+            is_causal=True,                               # ← clé
             dropout_p=self.attn_dropout if self.training else 0.0,
-)
+        )
         attn = attn.transpose(1, 2).contiguous().view(B, T, C)
         return self.out(attn)
 
