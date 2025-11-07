@@ -4,28 +4,58 @@ import torch.nn.functional as F
 
 
 
+
 class SelfAttention(nn.Module):
-    def __init__(self, embed_dim, heads):
+    def __init__(self, embed_dim, heads, dropout):
         super().__init__()
         self.embed_dim = embed_dim
         self.heads = heads
         self.head_dim = embed_dim // heads
         self.qkv = nn.Linear(embed_dim, embed_dim * 3)
         self.out = nn.Linear(embed_dim, embed_dim)
+        self.attn_dropout = dropout 
 
     def forward(self, x, mask=None):
         B, T, C = x.size()
         qkv = self.qkv(x).reshape(B, T, 3, self.heads, self.head_dim).permute(2,0,3,1,4)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        attn = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+        attn_mask = (mask == 0) 
+        attn = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attn_mask,
+            is_causal=False,
+            dropout_p=self.attn_dropout if self.training else 0.0,
+)
         attn = attn.transpose(1, 2).contiguous().view(B, T, C)
         return self.out(attn)
+
+# class SelfAttention(nn.Module):
+#     def __init__(self, embed_dim, heads):
+#         super().__init__()
+#         self.embed_dim = embed_dim
+#         self.heads = heads
+#         self.head_dim = embed_dim // heads
+#         self.qkv = nn.Linear(embed_dim, embed_dim * 3)
+#         self.out = nn.Linear(embed_dim, embed_dim)
+
+#     def forward(self, x, mask=None):
+#         B, T, C = x.size()
+#         qkv = self.qkv(x).reshape(B, T, 3, self.heads, self.head_dim).permute(2,0,3,1,4)
+#         q, k, v = qkv[0], qkv[1], qkv[2]
+
+#         scores = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5) 
+#         if mask is not None:
+#             scores = scores.masked_fill(mask == 0, float('-inf'))
+#         weights = F.softmax(scores, dim=-1)
+#         attn = weights @ v
+#         attn = attn.transpose(1,2).contiguous().view(B,T,C)
+#         return self.out(attn)
 
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim = 512):
         super().__init__()
-        self.attn = SelfAttention(embed_dim, heads)
+        self.attn = SelfAttention(embed_dim, heads, dropout)
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ff = nn.Sequential(
             nn.Linear(embed_dim, hidden_dim),
