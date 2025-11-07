@@ -29,28 +29,6 @@ class SelfAttention(nn.Module):
         attn = attn.transpose(1, 2).contiguous().view(B, T, C)
         return self.out(attn)
 
-# class SelfAttention(nn.Module):
-#     def __init__(self, embed_dim, heads):
-#         super().__init__()
-#         self.embed_dim = embed_dim
-#         self.heads = heads
-#         self.head_dim = embed_dim // heads
-#         self.qkv = nn.Linear(embed_dim, embed_dim * 3)
-#         self.out = nn.Linear(embed_dim, embed_dim)
-
-#     def forward(self, x, mask=None):
-#         B, T, C = x.size()
-#         qkv = self.qkv(x).reshape(B, T, 3, self.heads, self.head_dim).permute(2,0,3,1,4)
-#         q, k, v = qkv[0], qkv[1], qkv[2]
-
-#         scores = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5) 
-#         if mask is not None:
-#             scores = scores.masked_fill(mask == 0, float('-inf'))
-#         weights = F.softmax(scores, dim=-1)
-#         attn = weights @ v
-#         attn = attn.transpose(1,2).contiguous().view(B,T,C)
-#         return self.out(attn)
-
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim = 512):
         super().__init__()
@@ -58,7 +36,7 @@ class TransformerBlock(nn.Module):
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ff = nn.Sequential(
             nn.Linear(embed_dim, hidden_dim),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(hidden_dim, embed_dim),
         )
         self.ln2 = nn.LayerNorm(embed_dim)
@@ -78,6 +56,7 @@ class MiniGPT(nn.Module):
         self.ln_f = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, vocab_size)
         self.block_size = block_size
+        self.apply(self._init_weights)
 
     def forward(self, idx):
         B, T = idx.shape
@@ -90,7 +69,19 @@ class MiniGPT(nn.Module):
 
         x = self.ln_f(x)
         return self.head(x)
-
+    
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            torch.nn.init.ones_(module.weight)
+            torch.nn.init.zeros_(module.bias)
+            
+            
     @torch.no_grad()
     def generate(self, idx, max_new_tokens):
         for _ in range(max_new_tokens):
