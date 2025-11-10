@@ -101,7 +101,7 @@ else:
 
 trackio.init(
     project="mini-gpt",
-    experiment_name=f"mini-gpt_{config['model']['embed_dim']}d_{config['model']['depth']}L",
+    name=f"mini-gpt_{config['model']['embed_dim']}d_{config['model']['depth']}L",
     config=config, 
 )
 
