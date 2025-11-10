@@ -163,8 +163,33 @@ Example Colab snippet:
 ```
 !git clone https://github.com/eric-houzelle/mini-gpt.git
 %cd mini-gpt
-!pip install torch torchvision torchaudio transformers datasets python-dotenv
+!git checkout efficient-self-attention
+!pip install -r requirements.txt
+import torch
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Using device: {device}")
+
+import json, os
+
+with open(".env", "w") as f:
+    f.write("DATASET_NAME=iproskurina/TinyStories-French\n")
+    f.write("DATASET_KEY=french-tinystories\n")
+    f.write("TOKENIZER_NAME=camembert-base\n")
+    f.write("MODEL_SAVE_PATH=checkpoints/best_miniGPT.pt\n")
+
+
+config = {
+    "training": {"num_epochs": 300, "batch_size": 32, "learning_rate": 0.0003, "scheduler_max_lr": 0.0003},
+    "model": {"embed_dim": 256, "depth": 8, "heads": 8, "block_size": 128, "dropout": 0.1, "hidden_dim": 512},
+    "data": {"max_texts": 1000, "train_split_ratio": 0.9}
+}
+with open("config.json", "w") as f:
+    json.dump(config, f, indent=2)
+
+print("✅ .env and config.json ready!")
+
 !python train.py
+
 ```
 
 Or to generate text after training:
