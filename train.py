@@ -11,6 +11,7 @@ from dataset.text_dataset import TextDataset
 from model.model import MiniGPT
 from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
+import trackio
 
 load_dotenv()
 
@@ -98,6 +99,12 @@ if os.path.exists(MODEL_SAVE_PATH):
 else:
     os.makedirs(os.path.dirname(MODEL_SAVE_PATH), exist_ok=True)
 
+trackio.init(
+    project="mini-gpt",
+    experiment_name=f"mini-gpt_{config['model']['embed_dim']}d_{config['model']['depth']}L",
+    config=config, 
+)
+
 scaler = torch.amp.GradScaler("cuda")
 model = torch.compile(model)
 for epoch in range(num_epochs):
@@ -123,6 +130,14 @@ for epoch in range(num_epochs):
         # loss.backward() 
         # optimizer.step()
         # scheduler.step()
+        
+        if i % 50 == 0:
+            trackio.log({
+                "train/loss": loss.item(),
+                "epoch": epoch + 1,
+                "step": i,
+                "lr": scheduler.get_last_lr()[0]
+            })
 
         if i % 100 == 0:
             print(f"[{now()}] [Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
@@ -147,6 +162,11 @@ for epoch in range(num_epochs):
                 val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
         val_loss /= len(val_loader)
         print(f"[{now()}] Validation loss: {val_loss:.4f}")
+        
+    trackio.log({
+        "val/loss": val_loss,
+        "epoch": epoch + 1
+        })
 
 
     
