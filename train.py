@@ -137,7 +137,7 @@ for epoch in range(num_epochs):
                 "epoch": epoch + 1,
                 "step": i,
                 "lr": scheduler.get_last_lr()[0]
-            })
+            })  
 
         if i % 100 == 0:
             print(f"[{now()}] [Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
@@ -174,3 +174,4 @@ for epoch in range(num_epochs):
     context = torch.zeros((1,1), dtype=torch.long, device=device)
     out = model.generate(context, max_new_tokens=50)[0].tolist()
     print(f"[{now()}] Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
+trackio.finish()
