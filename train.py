@@ -96,10 +96,12 @@ if os.path.exists(MODEL_SAVE_PATH):
     start_epoch = checkpoint['epoch'] + 1
     best_loss = checkpoint.get('loss', float("inf"))
     last_epoch = start_epoch * len(train_loader)
+    scheduler_state_dict = checkpoint.get("scheduler_state_dict", None)
 else:
     start_epoch = 0
     best_loss = float("inf")
     last_epoch = -1
+    scheduler_state_dict = None
 
 scheduler = OneCycleLR(
     optimizer,
@@ -107,6 +109,8 @@ scheduler = OneCycleLR(
     total_steps=num_epochs * len(train_loader),
     last_epoch=last_epoch
 )
+if scheduler_state_dict is not None:
+    scheduler.load_state_dict(scheduler_state_dict)
 
 trackio.init(
     project="mini-gpt",
@@ -155,6 +159,7 @@ for epoch in range(start_epoch, num_epochs):
                 torch.save({
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
                     'epoch': epoch,
                     'loss': loss.item()
                 }, MODEL_SAVE_PATH)
