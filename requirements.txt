@@ -5,3 +5,4 @@ transformers
 datasets
 python-dotenv
 trackio
+sentencepiece

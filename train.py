@@ -88,16 +88,25 @@ print(f" - {human_readable(trainable_params)} trainable parameters")
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
-total_steps = num_epochs * len(train_loader)
-scheduler = OneCycleLR(optimizer, max_lr=scheduler_max_lr, total_steps=total_steps)
-
-best_loss = float("inf")
 
 if os.path.exists(MODEL_SAVE_PATH):
-    print(f"🔄 Chargement du modèle existant : {MODEL_SAVE_PATH}")
-    model.load_state_dict(torch.load(MODEL_SAVE_PATH))
+    checkpoint = torch.load(MODEL_SAVE_PATH, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    start_epoch = checkpoint['epoch'] + 1
+    best_loss = checkpoint.get('loss', float("inf"))
+    last_epoch = start_epoch * len(train_loader)
 else:
-    os.makedirs(os.path.dirname(MODEL_SAVE_PATH), exist_ok=True)
+    start_epoch = 0
+    best_loss = float("inf")
+    last_epoch = -1
+
+scheduler = OneCycleLR(
+    optimizer,
+    max_lr=scheduler_max_lr,
+    total_steps=num_epochs * len(train_loader),
+    last_epoch=last_epoch
+)
 
 trackio.init(
     project="mini-gpt",
