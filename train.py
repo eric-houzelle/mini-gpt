@@ -116,7 +116,7 @@ trackio.init(
 
 scaler = torch.amp.GradScaler("cuda")
 model = torch.compile(model)
-for epoch in range(num_epochs):
+for epoch in range(start_epoch, num_epochs):
     print(f"\n[{now()}] === Epoch {epoch+1}/{num_epochs} ===")
     model.train()
     for i, (xb, yb) in enumerate(train_loader):
