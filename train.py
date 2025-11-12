@@ -165,7 +165,7 @@ for epoch in range(start_epoch, num_epochs):
                 }, MODEL_SAVE_PATH)
                 print(f"[{now()}] New best model saved!")
 
-    if epoch % 20 == 0:
+    if epoch % 2 == 0:
         model.eval()
         val_loss = 0
         with torch.no_grad():
