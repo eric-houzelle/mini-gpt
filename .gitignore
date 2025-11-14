@@ -1,3 +1,5 @@
 temp.py
 .history
 __pycache__/
+checkpoints/
+mini-gpt-env/
