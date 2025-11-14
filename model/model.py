@@ -59,7 +59,8 @@ class MiniGPT(nn.Module):
         self.pos_emb = nn.Embedding(block_size, embed_dim)
         self.blocks = nn.ModuleList([TransformerBlock(embed_dim, heads, dropout, hidden_dim) for _ in range(depth)])
         self.ln_f = nn.LayerNorm(embed_dim)
-        self.head = nn.Linear(embed_dim, vocab_size)
+        self.head = nn.Linear(embed_dim, vocab_size, bias=False) # on enleve bias pour que head et token_emb est la meme taille
+        self.head.weight = self.token_emb.weight #On réutilise les poids de la matrice token_emb pour les tetes 
         self.block_size = block_size
         self.apply(self._init_weights)
 
