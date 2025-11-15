@@ -95,11 +95,13 @@ if os.path.exists(MODEL_SAVE_PATH):
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     start_epoch = checkpoint['epoch'] + 1
     best_loss = checkpoint.get('loss', float("inf"))
-    last_epoch = start_epoch * len(train_loader)
     scheduler_state_dict = checkpoint.get("scheduler_state_dict", None)
+    global_step = checkpoint.get('global_step', start_epoch * len(train_loader))
+    last_epoch = global_step - 1
 else:
     start_epoch = 0
     best_loss = float("inf")
+    global_step = 0
     last_epoch = -1
     scheduler_state_dict = None
 
@@ -113,7 +115,7 @@ if scheduler_state_dict is not None:
     scheduler.load_state_dict(scheduler_state_dict)
 
 trackio.init(
-    project="mini-gpt",
+    project="mini-gpt-1511-v5",
     name=f"mini-gpt_{config['model']['embed_dim']}d_{config['model']['depth']}L",
     config=config, 
 )
@@ -138,6 +140,7 @@ for epoch in range(start_epoch, num_epochs):
         scaler.step(optimizer)
         scaler.update()
         scheduler.step()
+        global_step += 1 
         
         ## without amp scaler
         # loss.backward() 
@@ -153,7 +156,8 @@ for epoch in range(start_epoch, num_epochs):
             })  
 
         if i % 100 == 0:
-            print(f"[{now()}] [Epoch {epoch+1} | Step {i}] loss={loss.item():.4f}")
+            current_lr = scheduler.get_last_lr()[0]
+            print(f"[{now()}] [Epoch {epoch+1} | Step {i}] loss={loss.item():.4f} | LR={current_lr:.2e}")
             if loss.item() < best_loss:
                 best_loss = loss.item()
                 torch.save({
@@ -161,6 +165,7 @@ for epoch in range(start_epoch, num_epochs):
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict(),
                     'epoch': epoch,
+                    'global_step': global_step,  # ← Ajoutez ceci
                     'loss': loss.item()
                 }, MODEL_SAVE_PATH)
                 print(f"[{now()}] New best model saved!")
