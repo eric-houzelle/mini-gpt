@@ -35,19 +35,22 @@ class SelfAttention(nn.Module):
         return self.resid_dropout(self.out(attn))
 
 class TransformerBlock(nn.Module):
-    def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim = 512):
+    def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim = 512, layerdrop=0.1):
         super().__init__()
         self.attn = SelfAttention(embed_dim, heads, dropout)
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ff = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim*4),
+            nn.Linear(embed_dim, hidden_dim),
             nn.GELU(),
-            nn.Linear(embed_dim*4, embed_dim),
+            nn.Linear(hidden_dim, embed_dim),
         )
         self.ln2 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
+        self.layerdrop = layerdrop
 
     def forward(self, x, mask=None):
+        if self.training and torch.rand(1).item() < self.layerdrop:
+            return x
         x = x + self.dropout(self.attn(self.ln1(x), mask))
         x = x + self.dropout(self.ff(self.ln2(x)))
         return x
