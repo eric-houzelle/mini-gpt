@@ -96,10 +96,12 @@ print(f" - {human_readable(trainable_params)} trainable parameters")
 
 
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-loss_fn = nn.CrossEntropyLoss(
-    ignore_index=tokenizer.pad_token_id,
-    label_smoothing=0.05
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=learning_rate,
+    weight_decay=0.1,
+    betas=(0.9, 0.95),
+    eps=1e-8
 )
 
 
