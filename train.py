@@ -12,6 +12,7 @@ from model.model import MiniGPT
 from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
 import trackio
+import math
 
 load_dotenv()
 
@@ -27,7 +28,6 @@ MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
 num_epochs = config["training"]["num_epochs"]
 batch_size = config["training"]["batch_size"]
 learning_rate = config["training"]["learning_rate"]
-scheduler_max_lr = config["training"]["scheduler_max_lr"]
 
 embed_dim = config["model"]["embed_dim"]
 depth = config["model"]["depth"]
@@ -70,6 +70,17 @@ model = MiniGPT(len(tokenizer), block_size, embed_dim=embed_dim, depth=depth, he
 total_params = sum(p.numel() for p in model.parameters())
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+def cosine_with_warmup(optimizer, warmup_steps, total_steps, min_lr_ratio=0.1):
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / warmup_steps
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        cosine = 0.5 * (1 + math.cos(math.pi * progress))
+        return max(min_lr_ratio, cosine)
+    
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
 def human_readable(num):
     if num >= 1e9:
         return f"{num/1e9:.2f}B"
@@ -108,12 +119,14 @@ else:
     last_epoch = -1
     scheduler_state_dict = None
 
-scheduler = OneCycleLR(
+total_steps = num_epochs * len(train_loader)
+scheduler = cosine_with_warmup(
     optimizer,
-    max_lr=scheduler_max_lr,
-    total_steps=num_epochs * len(train_loader),
-    last_epoch=last_epoch
+    warmup_steps=500,
+    total_steps=total_steps,
+    min_lr_ratio=0.1
 )
+
 if scheduler_state_dict is not None:
     scheduler.load_state_dict(scheduler_state_dict)
 
