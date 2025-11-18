@@ -104,6 +104,11 @@ optimizer = torch.optim.AdamW(
     eps=1e-8
 )
 
+loss_fn = nn.CrossEntropyLoss(
+    ignore_index=tokenizer.pad_token_id,
+    label_smoothing=0.05
+)
+
 
 if os.path.exists(MODEL_SAVE_PATH):
     checkpoint = torch.load(MODEL_SAVE_PATH, map_location=device)
