@@ -3,7 +3,6 @@
     "num_epochs": 1000,
     "batch_size": 32,
     "learning_rate": 3e-5,
-    "scheduler_max_lr": 3e-4
   },
   "model": {
     "embed_dim": 256,
