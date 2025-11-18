@@ -224,11 +224,11 @@ for epoch in range(start_epoch, num_epochs):
         val_loss /= len(val_loader)
         print(f"[{now()}] Validation loss: {val_loss:.4f}")
         
-        
-    trackio.log({
-        "val/loss": val_loss,
-        "epoch": epoch + 1
-        })
+    if val_loss > 0:
+        trackio.log({
+            "val/loss": val_loss,
+            "epoch": epoch + 1
+            })
 
 
     
