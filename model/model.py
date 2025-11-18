@@ -40,9 +40,9 @@ class TransformerBlock(nn.Module):
         self.attn = SelfAttention(embed_dim, heads, dropout)
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ff = nn.Sequential(
-            nn.Linear(embed_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, embed_dim),
+            nn.Linear(embed_dim, hidden_dim * 2, bias=False),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, embed_dim, bias=False)
         )
         self.ln2 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
