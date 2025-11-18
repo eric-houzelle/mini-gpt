@@ -11,7 +11,9 @@
     "heads": 8,
     "block_size": 128,
     "dropout": 0.25,
-    "hidden_dim": 512
+    "hidden_dim": 512,
+    "weight_sharing": "full",
+    "use_rope": true
   },
   "data": {
     "max_texts": 10000,

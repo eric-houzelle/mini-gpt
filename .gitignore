@@ -3,3 +3,4 @@ temp.py
 __pycache__/
 checkpoints/
 mini-gpt-env/
+docs/

@@ -36,6 +36,8 @@ heads = config["model"]["heads"]
 block_size = config["model"]["block_size"]
 dropout = config["model"]["dropout"]
 hidden_dim = config["model"]["hidden_dim"]
+weight_sharing = config["model"].get("weight_sharing", "none")  # STLM: weight sharing entre blocs
+use_rope = config["model"].get("use_rope", True)  # STLM: RoPE embeddings
 
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
@@ -66,10 +68,23 @@ val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = MiniGPT(len(tokenizer), block_size, embed_dim=embed_dim, depth=depth, heads=heads, dropout=dropout, hidden_dim= hidden_dim).to(device)
+model = MiniGPT(
+    len(tokenizer), 
+    block_size, 
+    embed_dim=embed_dim, 
+    depth=depth, 
+    heads=heads, 
+    dropout=dropout, 
+    hidden_dim=hidden_dim,
+    weight_sharing=weight_sharing,  # STLM: "none", "ffn" ou "full"
+    use_rope=use_rope  # STLM: RoPE au lieu de learned pos embeddings
+).to(device)
 
 total_params = sum(p.numel() for p in model.parameters())
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+# Afficher les stats détaillées du modèle
+model_stats = model.count_parameters()
 
 def cosine_with_warmup(optimizer, warmup_steps, total_steps, min_lr_ratio=0.1):
     def lr_lambda(step):
@@ -91,9 +106,26 @@ def human_readable(num):
         return f"{num/1e3:.2f}K"
     return str(num)
 
-print(f"\nModel initialized with:")
-print(f" - {human_readable(total_params)} total parameters")
-print(f" - {human_readable(trainable_params)} trainable parameters")
+print(f"\n{'='*70}")
+print(f"MODEL INITIALIZED - Super Tiny Language Model (STLM)")
+print(f"{'='*70}")
+print(f"\n📊 Architecture:")
+print(f"   - Layers: {depth}")
+print(f"   - Embed dim: {embed_dim}")
+print(f"   - Heads: {heads}")
+print(f"   - Hidden dim: {hidden_dim}")
+print(f"   - Block size: {block_size}")
+print(f"\n🔬 STLM Techniques:")
+print(f"   - Weight sharing: {weight_sharing.upper()}")
+print(f"   - Position encoding: {'RoPE' if use_rope else 'Learned'}")
+print(f"   - FFN activation: SwiGLU")
+print(f"\n📈 Parameters:")
+print(f"   - Total: {human_readable(total_params)} ({total_params:,})")
+print(f"   - Trainable: {human_readable(trainable_params)} ({trainable_params:,})")
+print(f"   - Token embeddings: {human_readable(model_stats['token_emb'])}")
+print(f"   - Pos embeddings: {human_readable(model_stats['pos_emb'])}")
+print(f"   - Transformer blocks: {human_readable(model_stats['blocks'])}")
+print(f"{'='*70}\n")
 
 
 decay_params = []
@@ -128,16 +160,19 @@ if os.path.exists(MODEL_SAVE_PATH):
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     start_epoch = checkpoint['epoch'] + 1
-    best_loss = checkpoint.get('loss', float("inf"))
+    best_loss = checkpoint.get('val_loss', checkpoint.get('loss', float("inf")))  # Priorité à val_loss
     scheduler_state_dict = checkpoint.get("scheduler_state_dict", None)
     global_step = checkpoint.get('global_step', start_epoch * len(train_loader))
     last_epoch = global_step - 1
+    print(f"\n✅ Checkpoint loaded from epoch {checkpoint['epoch']}")
+    print(f"   Best validation loss so far: {best_loss:.4f}")
 else:
     start_epoch = 0
     best_loss = float("inf")
     global_step = 0
     last_epoch = -1
     scheduler_state_dict = None
+    print(f"\n🆕 Starting fresh training")
 
 total_steps = num_epochs * len(train_loader)
 scheduler = cosine_with_warmup(
@@ -159,8 +194,14 @@ trackio.init(
 
 scaler = torch.amp.GradScaler("cuda")
 model = torch.compile(model, mode="reduce-overhead")
+
+epochs_without_improvement = 0
+patience = 10  # Nombre d'epochs sans amélioration avant warning
+
 for epoch in range(start_epoch, num_epochs):
-    print(f"\n[{now()}] === Epoch {epoch+1}/{num_epochs} ===")
+    print(f"\n{'='*70}")
+    print(f"[{now()}] Epoch {epoch+1}/{num_epochs}")
+    print(f"{'='*70}")
     model.train()
     for i, (xb, yb) in enumerate(train_loader):
         xb, yb = xb.to(device), yb.to(device)
@@ -194,41 +235,59 @@ for epoch in range(start_epoch, num_epochs):
 
         if i % 100 == 0:
             current_lr = scheduler.get_last_lr()[0]
-            print(f"[{now()}] [Epoch {epoch+1} | Step {i}] loss={loss.item():.4f} | LR={current_lr:.2e}")
-            if loss.item() < best_loss:
-                if hasattr(model, '_orig_mod'):
-                    model_to_save = model._orig_mod
-                else:
-                    model_to_save = model
-                best_loss = loss.item()
-                torch.save({
-                    'model_state_dict': model_to_save.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': scheduler.state_dict(),
-                    'epoch': epoch,
-                    'global_step': global_step,  # ← Ajoutez ceci
-                    'loss': loss.item()
-                }, MODEL_SAVE_PATH)
-                print(f"[{now()}] New best model saved!")
-                
+            print(f"[{now()}] [Epoch {epoch+1} | Step {i}] train_loss={loss.item():.4f} | LR={current_lr:.2e}")
+    
+    # Validation à chaque epoch
+    model.eval()
     val_loss = 0
-    if epoch % 2 == 0:
-        model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            for xb, yb in val_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                logits = model(xb)
-                B, T, C = logits.shape
-                val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
-        val_loss /= len(val_loader)
+    with torch.no_grad():
+        for xb, yb in val_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            logits = model(xb)
+            B, T, C = logits.shape
+            val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
+    val_loss /= len(val_loader)
+    
+    # Afficher et comparer avec le meilleur
+    improvement = best_loss - val_loss
+    if best_loss != float("inf"):
+        print(f"[{now()}] Validation loss: {val_loss:.4f} (best: {best_loss:.4f}, diff: {improvement:+.4f})")
+    else:
         print(f"[{now()}] Validation loss: {val_loss:.4f}")
+    
+    # Sauvegarder si la validation loss s'améliore
+    if val_loss < best_loss:
+        if hasattr(model, '_orig_mod'):
+            model_to_save = model._orig_mod
+        else:
+            model_to_save = model
         
-    if val_loss > 0:
-        trackio.log({
-            "val/loss": val_loss,
-            "epoch": epoch + 1
-            })
+        best_loss = val_loss
+        epochs_without_improvement = 0
+        
+        torch.save({
+            'model_state_dict': model_to_save.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'epoch': epoch,
+            'global_step': global_step,
+            'val_loss': val_loss
+        }, MODEL_SAVE_PATH)
+        print(f"[{now()}] ✅ New best model saved! (val_loss: {val_loss:.4f})")
+    else:
+        epochs_without_improvement += 1
+        print(f"[{now()}] ⚠️  No improvement for {epochs_without_improvement} epoch(s)")
+        
+        if epochs_without_improvement >= patience:
+            print(f"[{now()}] 💡 Consider reducing learning rate or stopping soon (no improvement for {epochs_without_improvement} epochs)")
+    
+    # Log sur trackio
+    trackio.log({
+        "val/loss": val_loss,
+        "best_val_loss": best_loss,
+        "epochs_without_improvement": epochs_without_improvement,
+        "epoch": epoch + 1
+    })
 
 
     
