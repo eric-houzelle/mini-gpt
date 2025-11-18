@@ -195,6 +195,10 @@ for epoch in range(start_epoch, num_epochs):
             current_lr = scheduler.get_last_lr()[0]
             print(f"[{now()}] [Epoch {epoch+1} | Step {i}] loss={loss.item():.4f} | LR={current_lr:.2e}")
             if loss.item() < best_loss:
+                if hasattr(model, '_orig_mod'):
+                    model_to_save = model._orig_mod
+                else:
+                    model_to_save = model
                 best_loss = loss.item()
                 torch.save({
                     'model_state_dict': model.state_dict(),
