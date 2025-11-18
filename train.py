@@ -210,7 +210,8 @@ for epoch in range(start_epoch, num_epochs):
                     'loss': loss.item()
                 }, MODEL_SAVE_PATH)
                 print(f"[{now()}] New best model saved!")
-
+                
+    val_loss = 0
     if epoch % 2 == 0:
         model.eval()
         val_loss = 0
