@@ -153,7 +153,8 @@ if scheduler_state_dict is not None:
 trackio.init(
     project="mini-gpt-1511-v5",
     name=f"mini-gpt_{config['model']['embed_dim']}d_{config['model']['depth']}L",
-    config=config, 
+    config=config,
+    resume="allow"
 )
 
 scaler = torch.amp.GradScaler("cuda")
