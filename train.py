@@ -86,7 +86,10 @@ print(f" - {human_readable(trainable_params)} trainable parameters")
 
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+loss_fn = nn.CrossEntropyLoss(
+    ignore_index=tokenizer.pad_token_id,
+    label_smoothing=0.05
+)
 
 
 if os.path.exists(MODEL_SAVE_PATH):
