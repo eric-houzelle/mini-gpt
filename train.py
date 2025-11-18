@@ -201,7 +201,7 @@ for epoch in range(start_epoch, num_epochs):
                     model_to_save = model
                 best_loss = loss.item()
                 torch.save({
-                    'model_state_dict': model.state_dict(),
+                    'model_state_dict': model_to_save.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict(),
                     'epoch': epoch,
