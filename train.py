@@ -78,7 +78,7 @@ model = MiniGPT(
     dropout=dropout, 
     hidden_dim=hidden_dim,
     weight_sharing=weight_sharing,  # STLM: "none", "ffn" ou "full"
-    use_rope=use_rope  # STLM: RoPE au lieu de learned pos embeddings
+    use_rope=use_rope,  # STLM: RoPE au lieu de learned pos embeddings
     use_gradient_checkpointing=use_gradient_checkpointing
 ).to(device)
 
