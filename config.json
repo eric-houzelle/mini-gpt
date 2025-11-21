@@ -13,7 +13,8 @@
     "dropout": 0.15,
     "hidden_dim": 2048,
     "weight_sharing": "none",
-    "use_rope": true
+    "use_rope": true,
+    "use_gradient_checkpointing": true
   },
   "data": {
     "max_texts": 30000,

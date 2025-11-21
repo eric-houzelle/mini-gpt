@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 class RoPEEmbedding(nn.Module):
@@ -129,9 +130,13 @@ class TransformerBlock(nn.Module):
         x = x + self.dropout(self.attn(self.ln1(x), mask))
         x = x + self.dropout(self.ff(self.ln2(x)))
         return x
+    
+    def forward_checkpointed(self, x, mask=None):
+        """Version avec gradient checkpointing pour économiser VRAM."""
+        return self.forward(x, mask)
 
 class MiniGPT(nn.Module):
-    def __init__(self, vocab_size, block_size, embed_dim=256, depth=8, heads=8, dropout = 0.1, hidden_dim = 512, weight_sharing="none", use_rope=True):
+    def __init__(self, vocab_size, block_size, embed_dim=256, depth=8, heads=8, dropout = 0.1, hidden_dim = 512, weight_sharing="none", use_rope=True, use_gradient_checkpointing=False):
         """
         Args:
             weight_sharing: Type de partage de poids entre les blocs
@@ -139,10 +144,14 @@ class MiniGPT(nn.Module):
                 - "ffn": Partage uniquement les FFN (comme MobiLlama)
                 - "full": Partage FFN + Attention (comme ALBERT, réduction 90-95%)
             use_rope: Utiliser RoPE embeddings au lieu de positional embeddings appris
+            use_gradient_checkpointing: Activer le gradient checkpointing pour économiser VRAM
+                - True: Économise 50-70% de VRAM, +20-30% temps de calcul
+                - False: VRAM normale, vitesse normale
         """
         super().__init__()
         self.token_emb = nn.Embedding(vocab_size, embed_dim)
         self.use_rope = use_rope
+        self.use_gradient_checkpointing = use_gradient_checkpointing
         
         # Positional embeddings uniquement si on n'utilise pas RoPE
         if not use_rope:
@@ -196,14 +205,22 @@ class MiniGPT(nn.Module):
 
         mask = torch.tril(torch.ones(T, T, device=idx.device)).unsqueeze(0).unsqueeze(0)
         
-        if self.weight_sharing == "full":
-            # ALBERT-style : réutiliser le même bloc depth fois
-            for _ in range(self.depth):
-                x = self.shared_block(x, mask)
+        # Gradient checkpointing : économise VRAM en recalculant les activations
+        if self.use_gradient_checkpointing and self.training:
+            if self.weight_sharing == "full":
+                for _ in range(self.depth):
+                    x = checkpoint(self.shared_block.forward_checkpointed, x, mask, use_reentrant=False)
+            else:
+                for block in self.blocks:
+                    x = checkpoint(block.forward_checkpointed, x, mask, use_reentrant=False)
         else:
-            # Comportement normal ou FFN sharing
-            for block in self.blocks:
-                x = block(x, mask)
+            # Mode normal (pas de checkpointing)
+            if self.weight_sharing == "full":
+                for _ in range(self.depth):
+                    x = self.shared_block(x, mask)
+            else:
+                for block in self.blocks:
+                    x = block(x, mask)
 
         x = self.ln_f(x)
         return self.head(x)

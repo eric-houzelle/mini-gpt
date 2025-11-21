@@ -38,6 +38,7 @@ dropout = config["model"]["dropout"]
 hidden_dim = config["model"]["hidden_dim"]
 weight_sharing = config["model"].get("weight_sharing", "none")  # STLM: weight sharing entre blocs
 use_rope = config["model"].get("use_rope", True)  # STLM: RoPE embeddings
+use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", True)
 
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
@@ -78,6 +79,7 @@ model = MiniGPT(
     hidden_dim=hidden_dim,
     weight_sharing=weight_sharing,  # STLM: "none", "ffn" ou "full"
     use_rope=use_rope  # STLM: RoPE au lieu de learned pos embeddings
+    use_gradient_checkpointing=use_gradient_checkpointing
 ).to(device)
 
 total_params = sum(p.numel() for p in model.parameters())
