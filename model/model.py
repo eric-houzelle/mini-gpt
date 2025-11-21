@@ -248,11 +248,47 @@ class MiniGPT(nn.Module):
         }
     
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens):
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None):
+        """
+        Génération de texte avec contrôle de la diversité.
+        
+        Args:
+            idx: Context initial [batch, seq_len]
+            max_new_tokens: Nombre de tokens à générer
+            temperature: Contrôle la diversité (0.1=conservateur, 1.0=normal, 2.0=créatif)
+            top_k: Garde seulement les k tokens les plus probables
+            top_p: Nucleus sampling, garde les tokens dont la somme des probas = p
+        """
         for _ in range(max_new_tokens):
             idx_cond = idx[:, -self.block_size:]
             logits = self(idx_cond)
             logits = logits[:, -1, :]
+            
+            # Appliquer la température
+            if temperature != 1.0:
+                logits = logits / temperature
+            
+            # Top-k filtering
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            
+            # Top-p (nucleus) filtering
+            if top_p is not None:
+                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                
+                # Retirer les tokens au-delà du seuil top_p
+                sorted_indices_to_remove = cumulative_probs > top_p
+                # Garder au moins le premier token
+                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                sorted_indices_to_remove[..., 0] = 0
+                
+                # Scatter les valeurs -inf
+                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+                logits[indices_to_remove] = -float('Inf')
+            
+            # Échantillonner
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, next_token), dim=1)

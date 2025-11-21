@@ -293,6 +293,6 @@ for epoch in range(start_epoch, num_epochs):
     
     model.eval()
     context = torch.zeros((1,1), dtype=torch.long, device=device)
-    out = model.generate(context, max_new_tokens=50)[0].tolist()
+    out = model.generate(context, max_new_tokens=50, temperature=0.8, top_p=0.9)[0].tolist()
     print(f"[{now()}] Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
 trackio.finish()
