@@ -12,9 +12,10 @@ CONFIG_PATH = "config.json"
 with open(CONFIG_PATH, "r") as f:
     config = json.load(f)
 
-DATASET_NAME = os.getenv("DATASET_NAME", "iproskurina/TinyStories-French")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
+PROMPT_TEMPLATE = os.getenv("PROMPT_TEMPLATE")
+STOP_SEQUENCE = os.getenv("STOP_SEQUENCE")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.float16 if torch.cuda.is_available() else torch.float32
@@ -66,12 +67,27 @@ else:
 
 # === Génération ===
 @torch.no_grad()
+def _format_prompt(prompt):
+    if PROMPT_TEMPLATE:
+        return PROMPT_TEMPLATE.format(prompt=prompt)
+    return prompt
+
+
 def generate_text(prompt, max_new_tokens=100):
-    input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+    formatted_prompt = _format_prompt(prompt)
+    input_ids = tokenizer.encode(formatted_prompt, return_tensors="pt").to(device)
     with torch.cuda.amp.autocast(enabled=(dtype == torch.float16)):
         output = model.generate(input_ids, max_new_tokens=max_new_tokens)[0]
-    text = tokenizer.decode(output.tolist(), skip_special_tokens=True)
-    return text
+
+    # Retirer le prompt: generer uniquement les nouveaux tokens
+    gen_tokens = output[input_ids.shape[-1]:]
+    text = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=True)
+
+    if STOP_SEQUENCE:
+        stop_index = text.find(STOP_SEQUENCE)
+        if stop_index != -1:
+            text = text[:stop_index]
+    return text.strip()
 
 # === Script principal ===
 if __name__ == "__main__":

@@ -25,6 +25,9 @@ DATASET_KEY = os.getenv("DATASET_KEY", "french-tinystories")
 DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
+PROMPT_TEMPLATE = os.getenv("PROMPT_TEMPLATE")
+STOP_SEQUENCE = os.getenv("STOP_SEQUENCE")
+EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il était une fois")
 
 num_epochs = config["training"]["num_epochs"]
 batch_size = config["training"]["batch_size"]
@@ -74,6 +77,20 @@ val_ds   = TextDataset(texts[split:], tokenizer, block_size)
 
 def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_prompt(prompt):
+    if PROMPT_TEMPLATE:
+        return PROMPT_TEMPLATE.format(prompt=prompt)
+    return prompt
+
+
+def strip_stop_sequence(text):
+    if STOP_SEQUENCE:
+        stop_idx = text.find(STOP_SEQUENCE)
+        if stop_idx != -1:
+            return text[:stop_idx]
+    return text
 
 def collate_fn(batch):
     xs, ys = zip(*batch)
@@ -311,7 +328,11 @@ for epoch in range(start_epoch, num_epochs):
 
     
     model.eval()
-    context = torch.zeros((1,1), dtype=torch.long, device=device)
-    out = model.generate(context, max_new_tokens=50, temperature=0.8, top_p=0.9)[0].tolist()
-    print(f"[{now()}] Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
+    formatted_prompt = format_prompt(EVAL_PROMPT)
+    input_ids = tokenizer.encode(formatted_prompt, return_tensors="pt").to(device)
+    out = model.generate(input_ids, max_new_tokens=50, temperature=0.8, top_p=0.9)[0]
+    gen_tokens = out[input_ids.shape[-1]:]
+    sample_text = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=True)
+    sample_text = strip_stop_sequence(sample_text).strip()
+    print(f"[{now()}] Exemple génération:", sample_text or "[empty]")
 trackio.finish()

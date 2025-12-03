@@ -112,13 +112,23 @@ Specifies runtime environment variables.
 DATASET_NAME=iproskurina/TinyStories-French
 TOKENIZER_NAME=camembert-base
 MODEL_SAVE_PATH=checkpoints/best_miniGPT.pt
-DATASET_TEMPLATE="Prompt: {caption}\n\n<SVG>\n{svg}\n</SVG>\n\nInstructions: {instructions}"  # optional
+DATASET_TEMPLATE="PROMPT_START\n{caption}\nPROMPT_END\nSVG_START\n{svg}\nSVG_END"  # optional
+PROMPT_TEMPLATE="PROMPT_START\n{prompt}\nPROMPT_END\nSVG_START\n"
+STOP_SEQUENCE="SVG_END"
+EVAL_PROMPT="Dessine un petit robot en SVG"
 ```
 
 `DATASET_TEMPLATE` lets you turn structured rows (multiple columns) into plain
 text before feeding them to `TextDataset`. It uses Python
 `template.format(**example)` so leaving it undefined keeps the previous
 "already-flat text" behaviour.
+
+When you rely on structural tags (recommended for prompt→SVG tasks), keep
+`PROMPT_TEMPLATE` and `STOP_SEQUENCE` aligned with the dataset template. During
+generation the script wraps the user prompt with `PROMPT_TEMPLATE` and truncates
+the decoded text at `STOP_SEQUENCE`, so MiniGPT only outputs the SVG section.
+`EVAL_PROMPT` controls the reference request printed during the validation
+sample at the end of each epoch.
 
 * * * * *
 
