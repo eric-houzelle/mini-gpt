@@ -112,7 +112,13 @@ Specifies runtime environment variables.
 DATASET_NAME=iproskurina/TinyStories-French
 TOKENIZER_NAME=camembert-base
 MODEL_SAVE_PATH=checkpoints/best_miniGPT.pt
+DATASET_TEMPLATE="Prompt: {caption}\n\n<SVG>\n{svg}\n</SVG>\n\nInstructions: {instructions}"  # optional
 ```
+
+`DATASET_TEMPLATE` lets you turn structured rows (multiple columns) into plain
+text before feeding them to `TextDataset`. It uses Python
+`template.format(**example)` so leaving it undefined keeps the previous
+"already-flat text" behaviour.
 
 * * * * *
 

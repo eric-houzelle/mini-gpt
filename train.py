@@ -22,6 +22,7 @@ with open(CONFIG_PATH, "r") as f:
 
 DATASET_NAME = os.getenv("DATASET_NAME", "iproskurina/TinyStories-French")
 DATASET_KEY = os.getenv("DATASET_KEY", "french-tinystories")
+DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
 
@@ -49,7 +50,23 @@ if tokenizer.pad_token is None:
 
 print(f"LOAD DATASET: {DATASET_NAME}")
 dataset = load_dataset(DATASET_NAME)
-texts = dataset["train"][DATASET_KEY][:max_texts]
+train_split_ds = dataset["train"]
+
+if DATASET_TEMPLATE:
+    class _SafeDict(dict):
+        def __missing__(self, key):
+            return ""
+
+    max_items = min(max_texts, len(train_split_ds))
+    subset = train_split_ds.select(range(max_items))
+    texts = [DATASET_TEMPLATE.format_map(_SafeDict(example)) for example in subset]
+    print("Using DATASET_TEMPLATE to format structured samples")
+else:
+    if DATASET_KEY not in train_split_ds.column_names:
+        raise ValueError(
+            f"Column '{DATASET_KEY}' not found in dataset. Available columns: {train_split_ds.column_names}"
+        )
+    texts = train_split_ds[DATASET_KEY][:max_texts]
 
 split = int(train_split_ratio * len(texts))
 train_ds = TextDataset(texts[:split], tokenizer, block_size)
