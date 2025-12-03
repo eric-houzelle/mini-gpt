@@ -333,6 +333,11 @@ for epoch in range(start_epoch, num_epochs):
     out = model.generate(input_ids, max_new_tokens=50, temperature=0.8, top_p=0.9)[0]
     gen_tokens = out[input_ids.shape[-1]:]
     sample_text = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=True)
-    sample_text = strip_stop_sequence(sample_text).strip()
+    raw_text = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=False)
+    print("RAW (avec tokens spéciaux)  :", repr(raw_text))
+    no_special = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=True)
+    print("NO_SPECIAL avant strip_stop :", repr(no_special))
+    sample_text = strip_stop_sequence(no_special).strip()
+    print("APRES strip_stop + strip    :", repr(sample_text))
     print(f"[{now()}] Exemple génération:", sample_text or "[empty]")
 trackio.finish()

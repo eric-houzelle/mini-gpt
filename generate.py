@@ -66,15 +66,25 @@ else:
     raise FileNotFoundError(f"❌ No model checkpoint found at {MODEL_SAVE_PATH}")
 
 # === Génération ===
+class _SafeDict(dict):
+    def __missing__(self, key):
+        return ""
+
+
 @torch.no_grad()
-def _format_prompt(prompt):
+def _format_prompt(prompt, caption=None, instructions=None):
     if PROMPT_TEMPLATE:
-        return PROMPT_TEMPLATE.format(prompt=prompt)
+        fmt = _SafeDict({
+            "prompt": prompt,
+            "caption": caption or prompt,
+            "instructions": instructions or prompt
+        })
+        return PROMPT_TEMPLATE.format_map(fmt)
     return prompt
 
 
-def generate_text(prompt, max_new_tokens=100):
-    formatted_prompt = _format_prompt(prompt)
+def generate_text(prompt, max_new_tokens=100, caption=None, instructions=None):
+    formatted_prompt = _format_prompt(prompt, caption=caption, instructions=instructions)
     input_ids = tokenizer.encode(formatted_prompt, return_tensors="pt").to(device)
     with torch.cuda.amp.autocast(enabled=(dtype == torch.float16)):
         output = model.generate(input_ids, max_new_tokens=max_new_tokens)[0]
@@ -93,11 +103,27 @@ def generate_text(prompt, max_new_tokens=100):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Generate text using MiniGPT")
-    parser.add_argument("--prompt", type=str, default="Il était une fois", help="Texte de départ")
+    parser.add_argument("--prompt", type=str, default="Il était une fois", help="Texte de départ ou champ libre")
+    parser.add_argument("--caption", type=str, default=None, help="Caption structurée (si DATASET_TEMPLATE attend ce champ)")
+    parser.add_argument("--instructions", type=str, default=None, help="Instructions structurées (si nécessaires)")
     parser.add_argument("--tokens", type=int, default=100, help="Nombre de tokens à générer")
     args = parser.parse_args()
 
-    print(f"\n📝 Prompt: {args.prompt}\n")
-    generated = generate_text(args.prompt, max_new_tokens=args.tokens)
+    print(f"\n📝 Prompt: {args.prompt}")
+    if args.caption or args.instructions:
+        print("📋 Champs structurés:", end=" ")
+        parts = []
+        if args.caption:
+            parts.append("caption")
+        if args.instructions:
+            parts.append("instructions")
+        print(", ".join(parts))
+    print()
+    generated = generate_text(
+        args.prompt,
+        max_new_tokens=args.tokens,
+        caption=args.caption,
+        instructions=args.instructions
+    )
     print("✨ Texte généré :\n")
     print(generated)
