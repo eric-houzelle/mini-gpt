@@ -328,16 +328,7 @@ for epoch in range(start_epoch, num_epochs):
 
     
     model.eval()
-    formatted_prompt = format_prompt(EVAL_PROMPT)
-    input_ids = tokenizer.encode(formatted_prompt, return_tensors="pt").to(device)
-    out = model.generate(input_ids, max_new_tokens=50, temperature=0.8, top_p=0.9)[0]
-    gen_tokens = out[input_ids.shape[-1]:]
-    sample_text = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=True)
-    raw_text = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=False)
-    print("RAW (avec tokens spéciaux)  :", repr(raw_text))
-    no_special = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=True)
-    print("NO_SPECIAL avant strip_stop :", repr(no_special))
-    sample_text = strip_stop_sequence(no_special).strip()
-    print("APRES strip_stop + strip    :", repr(sample_text))
-    print(f"[{now()}] Exemple génération:", sample_text or "[empty]")
+    context = torch.zeros((1,1), dtype=torch.long, device=device)
+    out = model.generate(context, max_new_tokens=500, temperature=0.8, top_p=0.9)[0].tolist()
+    print(f"[{now()}] Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
 trackio.finish()
