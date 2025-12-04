@@ -328,7 +328,17 @@ for epoch in range(start_epoch, num_epochs):
 
     
     model.eval()
-    context = torch.zeros((1,1), dtype=torch.long, device=device)
-    out = model.generate(context, max_new_tokens=500, temperature=0.8, top_p=0.9)[0].tolist()
-    print(f"[{now()}] Exemple génération:", tokenizer.decode(out, skip_special_tokens=True))
+    # Exemple de génération aligné avec le format du dataset (<SVG> ... </SVG>)
+    example_prompt = f"Prompt: {EVAL_PROMPT}\n\n<SVG>\n"
+    prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
+    with torch.no_grad():
+        sample = model.generate(
+            prompt_ids,
+            max_new_tokens=400,
+            temperature=0.6,
+            top_p=0.9
+        )[0]
+    gen_only = sample[prompt_ids.shape[-1]:]
+    gen_text = tokenizer.decode(gen_only, skip_special_tokens=True)
+    print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
 trackio.finish()
