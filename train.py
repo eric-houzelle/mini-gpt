@@ -4,7 +4,8 @@ import torch
 from datetime import datetime
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import CamembertTokenizer
+from transformers import AutoTokenizer
+import string
 from datasets import load_dataset
 from torch.optim.lr_scheduler import OneCycleLR
 from dataset.text_dataset import TextDataset
@@ -25,7 +26,6 @@ DATASET_KEY = os.getenv("DATASET_KEY", "french-tinystories")
 DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
-STOP_SEQUENCE = os.getenv("STOP_SEQUENCE")
 EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il était une fois")
 EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "500"))
 
@@ -47,9 +47,18 @@ use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", T
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
 
-tokenizer = CamembertTokenizer.from_pretrained(TOKENIZER_NAME)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
+def load_tokenizer(tokenizer_name):
+    tok = AutoTokenizer.from_pretrained(tokenizer_name)
+    if tok.pad_token is None:
+        if tok.eos_token is not None:
+            tok.pad_token = tok.eos_token
+        elif tok.sep_token is not None:
+            tok.pad_token = tok.sep_token
+        else:
+            tok.add_special_tokens({"pad_token": "[PAD]"})
+    return tok
+
+tokenizer = load_tokenizer(TOKENIZER_NAME)
 
 print(f"LOAD DATASET: {DATASET_NAME}")
 dataset = load_dataset(DATASET_NAME)
@@ -80,19 +89,73 @@ def now():
 
 
 
-
-def strip_stop_sequence(text):
-    if STOP_SEQUENCE:
-        stop_idx = text.find(STOP_SEQUENCE)
-        if stop_idx != -1:
-            return text[:stop_idx]
-    return text
-
 def collate_fn(batch):
     xs, ys = zip(*batch)
     xs = pad_sequence(xs, batch_first=True, padding_value=tokenizer.pad_token_id)
     ys = pad_sequence(ys, batch_first=True, padding_value=tokenizer.pad_token_id)
     return xs, ys
+
+def compute_validation_loss(model, val_loader, loss_fn, device):
+    """Calcule la loss de validation moyenne sur l'ensemble du loader."""
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for xb_val, yb_val in val_loader:
+            xb_val, yb_val = xb_val.to(device), yb_val.to(device)
+            logits = model(xb_val)
+            B, T, C = logits.shape
+            total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
+    return total_loss / len(val_loader)
+
+def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=400, min_new_tokens=20, temperature=0.8):
+    """Génère un exemple de texte pour suivi rapide pendant l'entraînement."""
+    model.eval()
+
+    if dataset_template:
+        class _SafeDict(dict):
+            def __missing__(self, key):
+                return eval_prompt  
+
+        formatter = string.Formatter()
+        field_names = {
+            field_name for _, field_name, _, _ in formatter.parse(dataset_template) if field_name
+        }
+        fmt = _SafeDict({name: eval_prompt for name in field_names})
+        example_prompt = dataset_template.format_map(fmt)
+        prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
+    else:
+        example_prompt = None
+        prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
+
+    eos_id = tokenizer.eos_token_id
+    with torch.no_grad():
+        idx = prompt_ids
+        for step in range(max_new_tokens):
+            idx_cond = idx[:, -block_size:]
+            logits = model(idx_cond)[:, -1, :]
+            if temperature != 1.0:
+                logits = logits / temperature
+            probs = torch.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+
+            # Évite d'échantillonner EOS trop tôt
+            if eos_id is not None and step < min_new_tokens:
+                while next_token.item() == eos_id:
+                    next_token = torch.multinomial(probs, num_samples=1)
+
+            idx = torch.cat((idx, next_token), dim=1)
+            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
+                break
+
+        sample = idx[0]
+
+    prompt_len = prompt_ids.shape[-1]
+    gen_only = sample[prompt_len:]
+    gen_tokens = gen_only.tolist()
+    gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+    gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
+
+    return example_prompt, gen_text, gen_text_raw, gen_tokens
 
 train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
@@ -228,7 +291,7 @@ scaler = torch.amp.GradScaler("cuda")
 model = torch.compile(model, mode="reduce-overhead")
 
 epochs_without_improvement = 0
-patience = 10  # Nombre d'epochs sans amélioration avant warning
+patience = 10
 
 for epoch in range(start_epoch, num_epochs):
     print(f"\n{'='*70}")
@@ -271,16 +334,7 @@ for epoch in range(start_epoch, num_epochs):
 
         # Validation et génération périodiques
         if global_step % EVAL_EVERY_STEPS == 0:
-            model.eval()
-            val_loss = 0
-            with torch.no_grad():
-                for xb_val, yb_val in val_loader:
-                    xb_val, yb_val = xb_val.to(device), yb_val.to(device)
-                    logits = model(xb_val)
-                    B, T, C = logits.shape
-                    val_loss += loss_fn(logits.view(B*T, C), yb_val.view(B*T)).item()
-            val_loss /= len(val_loader)
-
+            val_loss = compute_validation_loss(model, val_loader, loss_fn, device)
             improvement = best_loss - val_loss
             if best_loss != float("inf"):
                 print(f"[{now()}] [step {global_step}] Validation loss: {val_loss:.4f} (best: {best_loss:.4f}, diff: {improvement:+.4f})")
@@ -316,49 +370,14 @@ for epoch in range(start_epoch, num_epochs):
             })
 
             # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
-            if DATASET_TEMPLATE:
-                fmt = _SafeDict({
-                    "caption": EVAL_PROMPT,
-                    "description": EVAL_PROMPT,
-                    "instructions": EVAL_PROMPT,
-                    "svg": ""
-                })
-                example_prompt = DATASET_TEMPLATE.format_map(fmt)
-                prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
-            else:
-                example_prompt = None
-                prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
-            max_new_tokens = 400
-            min_new_tokens = 20  # évite d'échantillonner uniquement l'eos
-            temperature = 0.8
-            eos_id = tokenizer.eos_token_id
-
-            with torch.no_grad():
-                idx = prompt_ids
-                for step in range(max_new_tokens):
-                    idx_cond = idx[:, -block_size:]
-                    logits = model(idx_cond)[:, -1, :]
-                    if temperature != 1.0:
-                        logits = logits / temperature
-                    probs = torch.softmax(logits, dim=-1)
-                    next_token = torch.multinomial(probs, num_samples=1)
-
-                    # évite d'échantillonner EOS trop tôt
-                    if eos_id is not None and step < min_new_tokens:
-                        while next_token.item() == eos_id:
-                            next_token = torch.multinomial(probs, num_samples=1)
-
-                    idx = torch.cat((idx, next_token), dim=1)
-                    if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
-                        break
-
-                sample = idx[0]
-
-            prompt_len = prompt_ids.shape[-1]
-            gen_only = sample[prompt_len:]
-            gen_tokens = gen_only.tolist()
-            gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
-            gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
+            _, gen_text, gen_text_raw, gen_tokens = generate_example(
+                model,
+                tokenizer,
+                block_size,
+                device,
+                DATASET_TEMPLATE,
+                EVAL_PROMPT
+            )
             print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
             if not gen_text:
                 print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")

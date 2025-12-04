@@ -1,7 +1,7 @@
 import os
 import json
 import torch
-from transformers import CamembertTokenizer
+from transformers import AutoTokenizer
 from dotenv import load_dotenv
 from model.model import MiniGPT
 
@@ -22,9 +22,18 @@ dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 print(f"✅ Device: {device} (dtype={dtype})")
 
 # === Tokenizer ===
-tokenizer = CamembertTokenizer.from_pretrained(TOKENIZER_NAME)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
+def load_tokenizer(tokenizer_name):
+    tok = AutoTokenizer.from_pretrained(tokenizer_name)
+    if tok.pad_token is None:
+        if tok.eos_token is not None:
+            tok.pad_token = tok.eos_token
+        elif tok.sep_token is not None:
+            tok.pad_token = tok.sep_token
+        else:
+            tok.add_special_tokens({"pad_token": "[PAD]"})
+    return tok
+
+tokenizer = load_tokenizer(TOKENIZER_NAME)
 
 # === Hyperparams ===
 vocab_size = len(tokenizer)
