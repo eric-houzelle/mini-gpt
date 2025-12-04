@@ -331,13 +331,32 @@ for epoch in range(start_epoch, num_epochs):
     # Exemple de génération aligné avec le format du dataset (<SVG> ... </SVG>)
     example_prompt = f"Prompt: {EVAL_PROMPT}\n\n<SVG>\n"
     prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
+    max_new_tokens = 400
+    min_new_tokens = 20  # évite d'échantillonner uniquement l'eos
+    temperature = 0.8
+    eos_id = tokenizer.eos_token_id
+
     with torch.no_grad():
-        sample = model.generate(
-            prompt_ids,
-            max_new_tokens=400,
-            temperature=0.6,
-            top_p=0.9
-        )[0]
+        idx = prompt_ids
+        for step in range(max_new_tokens):
+            idx_cond = idx[:, -block_size:]
+            logits = model(idx_cond)[:, -1, :]
+            if temperature != 1.0:
+                logits = logits / temperature
+            probs = torch.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+
+            # évite d'échantillonner EOS trop tôt
+            if eos_id is not None and step < min_new_tokens:
+                while next_token.item() == eos_id:
+                    next_token = torch.multinomial(probs, num_samples=1)
+
+            idx = torch.cat((idx, next_token), dim=1)
+            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
+                break
+
+        sample = idx[0]
+
     prompt_len = prompt_ids.shape[-1]
     gen_only = sample[prompt_len:]
     gen_tokens = gen_only.tolist()
