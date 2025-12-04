@@ -14,7 +14,7 @@ from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
 import trackio
 import math
-
+torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True
 load_dotenv()
 
 CONFIG_PATH = "config.json"
