@@ -324,7 +324,7 @@ for epoch in range(start_epoch, num_epochs):
             trackio.log({
                 "train/loss": loss.item(),
                 "epoch": epoch + 1,
-                "step": i,
+                "__step": i,
                 "lr": scheduler.get_last_lr()[0]
             })  
 
