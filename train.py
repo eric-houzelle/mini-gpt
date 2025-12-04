@@ -340,6 +340,11 @@ for epoch in range(start_epoch, num_epochs):
         )[0]
     prompt_len = prompt_ids.shape[-1]
     gen_only = sample[prompt_len:]
-    gen_text = tokenizer.decode(gen_only.tolist(), skip_special_tokens=True)
+    gen_tokens = gen_only.tolist()
+    gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+    gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
     print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
+    if not gen_text:
+        print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")
+        print(f"[DEBUG] gen_text_raw: {gen_text_raw}")
 trackio.finish()
