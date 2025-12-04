@@ -27,6 +27,7 @@ TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
 STOP_SEQUENCE = os.getenv("STOP_SEQUENCE")
 EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il était une fois")
+EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "500"))
 
 num_epochs = config["training"]["num_epochs"]
 batch_size = config["training"]["batch_size"]
@@ -267,108 +268,101 @@ for epoch in range(start_epoch, num_epochs):
         if i % 100 == 0:
             current_lr = scheduler.get_last_lr()[0]
             print(f"[{now()}] [Epoch {epoch+1} | Step {i}] train_loss={loss.item():.4f} | LR={current_lr:.2e}")
-    
-    # Validation à chaque epoch
-    model.eval()
-    val_loss = 0
-    with torch.no_grad():
-        for xb, yb in val_loader:
-            xb, yb = xb.to(device), yb.to(device)
-            logits = model(xb)
-            B, T, C = logits.shape
-            val_loss += loss_fn(logits.view(B*T, C), yb.view(B*T)).item()
-    val_loss /= len(val_loader)
-    
-    # Afficher et comparer avec le meilleur
-    improvement = best_loss - val_loss
-    if best_loss != float("inf"):
-        print(f"[{now()}] Validation loss: {val_loss:.4f} (best: {best_loss:.4f}, diff: {improvement:+.4f})")
-    else:
-        print(f"[{now()}] Validation loss: {val_loss:.4f}")
-    
-    # Sauvegarder si la validation loss s'améliore
-    if val_loss < best_loss:
-        if hasattr(model, '_orig_mod'):
-            model_to_save = model._orig_mod
-        else:
-            model_to_save = model
-        
-        best_loss = val_loss
-        epochs_without_improvement = 0
-        
-        torch.save({
-            'model_state_dict': model_to_save.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'epoch': epoch,
-            'global_step': global_step,
-            'val_loss': val_loss
-        }, MODEL_SAVE_PATH)
-        print(f"[{now()}] ✅ New best model saved! (val_loss: {val_loss:.4f})")
-    else:
-        epochs_without_improvement += 1
-        print(f"[{now()}] ⚠️  No improvement for {epochs_without_improvement} epoch(s)")
-        
-        if epochs_without_improvement >= patience:
-            print(f"[{now()}] 💡 Consider reducing learning rate or stopping soon (no improvement for {epochs_without_improvement} epochs)")
-    
-    # Log sur trackio
-    trackio.log({
-        "val/loss": val_loss,
-        "best_val_loss": best_loss,
-        "epochs_without_improvement": epochs_without_improvement,
-        "epoch": epoch + 1
-    })
 
+        # Validation et génération périodiques
+        if global_step % EVAL_EVERY_STEPS == 0:
+            model.eval()
+            val_loss = 0
+            with torch.no_grad():
+                for xb_val, yb_val in val_loader:
+                    xb_val, yb_val = xb_val.to(device), yb_val.to(device)
+                    logits = model(xb_val)
+                    B, T, C = logits.shape
+                    val_loss += loss_fn(logits.view(B*T, C), yb_val.view(B*T)).item()
+            val_loss /= len(val_loader)
 
-    
-    model.eval()
-    # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
-    if DATASET_TEMPLATE:
-        fmt = _SafeDict({
-            "caption": EVAL_PROMPT,
-            "description": EVAL_PROMPT,
-            "instructions": EVAL_PROMPT,
-            "svg": ""
-        })
-        example_prompt = DATASET_TEMPLATE.format_map(fmt)
-        prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
-    else:
-        example_prompt = None
-        prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
-    max_new_tokens = 400
-    min_new_tokens = 20  # évite d'échantillonner uniquement l'eos
-    temperature = 0.8
-    eos_id = tokenizer.eos_token_id
+            improvement = best_loss - val_loss
+            if best_loss != float("inf"):
+                print(f"[{now()}] [step {global_step}] Validation loss: {val_loss:.4f} (best: {best_loss:.4f}, diff: {improvement:+.4f})")
+            else:
+                print(f"[{now()}] [step {global_step}] Validation loss: {val_loss:.4f}")
 
-    with torch.no_grad():
-        idx = prompt_ids
-        for step in range(max_new_tokens):
-            idx_cond = idx[:, -block_size:]
-            logits = model(idx_cond)[:, -1, :]
-            if temperature != 1.0:
-                logits = logits / temperature
-            probs = torch.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
+            if val_loss < best_loss:
+                model_to_save = model._orig_mod if hasattr(model, '_orig_mod') else model
+                best_loss = val_loss
+                epochs_without_improvement = 0
+                torch.save({
+                    'model_state_dict': model_to_save.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
+                    'epoch': epoch,
+                    'global_step': global_step,
+                    'val_loss': val_loss
+                }, MODEL_SAVE_PATH)
+                print(f"[{now()}] ✅ New best model saved! (val_loss: {val_loss:.4f})")
+            else:
+                epochs_without_improvement += 1
+                print(f"[{now()}] ⚠️  No improvement for {epochs_without_improvement} eval(s)")
 
-            # évite d'échantillonner EOS trop tôt
-            if eos_id is not None and step < min_new_tokens:
-                while next_token.item() == eos_id:
+                if epochs_without_improvement >= patience:
+                    print(f"[{now()}] 💡 Consider reducing learning rate or stopping soon (no improvement for {epochs_without_improvement} evals)")
+
+            trackio.log({
+                "val/loss": val_loss,
+                "best_val_loss": best_loss,
+                "epochs_without_improvement": epochs_without_improvement,
+                "epoch": epoch + 1,
+                "global_step": global_step
+            })
+
+            # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
+            if DATASET_TEMPLATE:
+                fmt = _SafeDict({
+                    "caption": EVAL_PROMPT,
+                    "description": EVAL_PROMPT,
+                    "instructions": EVAL_PROMPT,
+                    "svg": ""
+                })
+                example_prompt = DATASET_TEMPLATE.format_map(fmt)
+                prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
+            else:
+                example_prompt = None
+                prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
+            max_new_tokens = 400
+            min_new_tokens = 20  # évite d'échantillonner uniquement l'eos
+            temperature = 0.8
+            eos_id = tokenizer.eos_token_id
+
+            with torch.no_grad():
+                idx = prompt_ids
+                for step in range(max_new_tokens):
+                    idx_cond = idx[:, -block_size:]
+                    logits = model(idx_cond)[:, -1, :]
+                    if temperature != 1.0:
+                        logits = logits / temperature
+                    probs = torch.softmax(logits, dim=-1)
                     next_token = torch.multinomial(probs, num_samples=1)
 
-            idx = torch.cat((idx, next_token), dim=1)
-            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
-                break
+                    # évite d'échantillonner EOS trop tôt
+                    if eos_id is not None and step < min_new_tokens:
+                        while next_token.item() == eos_id:
+                            next_token = torch.multinomial(probs, num_samples=1)
 
-        sample = idx[0]
+                    idx = torch.cat((idx, next_token), dim=1)
+                    if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
+                        break
 
-    prompt_len = prompt_ids.shape[-1]
-    gen_only = sample[prompt_len:]
-    gen_tokens = gen_only.tolist()
-    gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
-    gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
-    print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
-    if not gen_text:
-        print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")
-        print(f"[DEBUG] gen_text_raw: {gen_text_raw}")
+                sample = idx[0]
+
+            prompt_len = prompt_ids.shape[-1]
+            gen_only = sample[prompt_len:]
+            gen_tokens = gen_only.tolist()
+            gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+            gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
+            print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
+            if not gen_text:
+                print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")
+                print(f"[DEBUG] gen_text_raw: {gen_text_raw}")
+
+            model.train()
 trackio.finish()
