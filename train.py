@@ -338,7 +338,8 @@ for epoch in range(start_epoch, num_epochs):
             temperature=0.6,
             top_p=0.9
         )[0]
-    gen_only = sample[prompt_ids.shape[-1]:]
-    gen_text = tokenizer.decode(gen_only, skip_special_tokens=True)
+    prompt_len = prompt_ids.shape[-1]
+    gen_only = sample[prompt_len:]
+    gen_text = tokenizer.decode(gen_only.tolist(), skip_special_tokens=True)
     print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
 trackio.finish()
