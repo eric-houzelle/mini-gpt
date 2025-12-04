@@ -324,22 +324,20 @@ for epoch in range(start_epoch, num_epochs):
 
     
     model.eval()
-    # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
     if DATASET_TEMPLATE:
-        # Remplir dynamiquement les placeholders présents dans DATASET_TEMPLATE
         fields = [fname for _, fname, _, _ in Formatter().parse(DATASET_TEMPLATE) if fname]
         fmt = {}
         for name in fields:
-            # Par défaut on met EVAL_PROMPT, sauf pour svg que l'on laisse vide
             fmt[name] = "" if name.lower() == "svg" else EVAL_PROMPT
         example_prompt = DATASET_TEMPLATE.format_map(_SafeDict(fmt))
         prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
     else:
         example_prompt = None
         prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
-    max_new_tokens = 400
-    min_new_tokens = 20  # évite d'échantillonner uniquement l'eos
-    temperature = 0.8
+    # Exemple court pour ne pas rallonger l'epoch
+    max_new_tokens = 120
+    min_new_tokens = 10 
+    temperature = 0.7
     eos_id = tokenizer.eos_token_id
 
     with torch.no_grad():
@@ -348,7 +346,7 @@ for epoch in range(start_epoch, num_epochs):
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=0.9,
-            top_k=None,
+            top_k=50,
             min_new_tokens=min_new_tokens,
             eos_token_id=eos_id
         )[0]
