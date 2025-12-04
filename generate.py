@@ -1,11 +1,12 @@
 import os
 import json
 import torch
+import contextlib
 from transformers import AutoTokenizer
 from dotenv import load_dotenv
 from model.model import MiniGPT
 
-# === Chargement config + env ===
+# --- Environment & config ----------------------------------------------------
 load_dotenv()
 
 CONFIG_PATH = "config.json"
@@ -18,11 +19,16 @@ PROMPT_TEMPLATE = os.getenv("PROMPT_TEMPLATE")
 STOP_SEQUENCE = os.getenv("STOP_SEQUENCE")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-print(f"✅ Device: {device} (dtype={dtype})")
+print(f"✅ Device: {device}")
 
-# === Tokenizer ===
-def load_tokenizer(tokenizer_name):
+# Recommended TF32 API (avoid deprecated allow_tf32 flags)
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision("high")
+    torch.backends.cudnn.conv.fp32_precision = "high"
+
+
+# --- Tokenizer ---------------------------------------------------------------
+def load_tokenizer(tokenizer_name: str):
     tok = AutoTokenizer.from_pretrained(tokenizer_name)
     if tok.pad_token is None:
         if tok.eos_token is not None:
@@ -33,107 +39,124 @@ def load_tokenizer(tokenizer_name):
             tok.add_special_tokens({"pad_token": "[PAD]"})
     return tok
 
+
 tokenizer = load_tokenizer(TOKENIZER_NAME)
 
-# === Hyperparams ===
-vocab_size = len(tokenizer)
-block_size = config["model"]["block_size"]
-embed_dim = config["model"]["embed_dim"]
-depth = config["model"]["depth"]
-heads = config["model"]["heads"]
-dropout = config["model"]["dropout"]
-hidden_dim = config["model"]["hidden_dim"]
 
-# === Modèle ===
+# --- Model -------------------------------------------------------------------
+model_cfg = config["model"]
 model = MiniGPT(
     len(tokenizer),
-    block_size,
-    embed_dim=embed_dim,
-    depth=depth,
-    heads=heads,
-    dropout=dropout,
-    hidden_dim=hidden_dim
+    model_cfg["block_size"],
+    embed_dim=model_cfg["embed_dim"],
+    depth=model_cfg["depth"],
+    heads=model_cfg["heads"],
+    dropout=model_cfg["dropout"],
+    hidden_dim=model_cfg["hidden_dim"],
+    weight_sharing=model_cfg.get("weight_sharing", "none"),
+    use_rope=model_cfg.get("use_rope", True),
+    use_gradient_checkpointing=False,  # inference: no checkpointing
 ).to(device)
 
-# === Chargement du checkpoint ===
 if os.path.exists(MODEL_SAVE_PATH):
     checkpoint = torch.load(MODEL_SAVE_PATH, map_location=device)
-    if "model_state_dict" in checkpoint:
-        model.load_state_dict(checkpoint["model_state_dict"])
-    else:
-        model.load_state_dict(checkpoint)
+    state = checkpoint.get("model_state_dict", checkpoint)
+    model.load_state_dict(state, strict=False)
     print(f"✅ Model loaded from {MODEL_SAVE_PATH}")
 else:
     raise FileNotFoundError(f"❌ No model checkpoint found at {MODEL_SAVE_PATH}")
 
 model.eval()
 
-# === Compilation (si dispo) ===
 try:
-    model = torch.compile(model)
+    model = torch.compile(model, mode="reduce-overhead")
     print("⚙️ Model compiled for optimized inference")
 except Exception:
     print("⚠️ torch.compile not supported here — running normally")
 
-# === Génération ===
+
+# --- Prompt helpers ----------------------------------------------------------
 class _SafeDict(dict):
     def __missing__(self, key):
         return ""
 
 
-@torch.no_grad()
-def _format_prompt(prompt, caption=None, instructions=None):
+def format_prompt(prompt: str, caption: str | None, instructions: str | None) -> str:
     if PROMPT_TEMPLATE:
-        fmt = _SafeDict({
-            "prompt": prompt,
-            "caption": caption or prompt,
-            "instructions": instructions or prompt
-        })
+        fmt = _SafeDict(
+            {"prompt": prompt, "caption": caption or prompt, "instructions": instructions or prompt}
+        )
         return PROMPT_TEMPLATE.format_map(fmt)
     return prompt
 
 
-def generate_text(prompt, max_new_tokens=100, caption=None, instructions=None):
-    formatted_prompt = _format_prompt(prompt, caption=caption, instructions=instructions)
-    input_ids = tokenizer.encode(formatted_prompt, return_tensors="pt").to(device)
-    with torch.cuda.amp.autocast(enabled=(dtype == torch.float16)):
-        output = model.generate(input_ids, max_new_tokens=max_new_tokens)[0]
+# --- Generation --------------------------------------------------------------
+@torch.inference_mode()
+def generate_text(
+    prompt: str,
+    max_new_tokens: int = 100,
+    caption: str | None = None,
+    instructions: str | None = None,
+    temperature: float = 1.0,
+    top_k: int | None = None,
+    top_p: float | None = None,
+    min_new_tokens: int = 0,
+):
+    formatted = format_prompt(prompt, caption=caption, instructions=instructions)
+    input_ids = tokenizer.encode(formatted, return_tensors="pt").to(device)
 
-    # Retirer le prompt: generer uniquement les nouveaux tokens
-    gen_tokens = output[input_ids.shape[-1]:]
+    # autocast for GPU inference
+    if torch.cuda.is_available():
+        autocast_ctx = torch.cuda.amp.autocast(dtype=torch.float16)
+    else:
+        autocast_ctx = contextlib.nullcontext()
+
+    with autocast_ctx:
+        output = model.generate(
+            input_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            min_new_tokens=min_new_tokens,
+            eos_token_id=tokenizer.eos_token_id,
+        )[0]
+
+    gen_tokens = output[input_ids.shape[-1] :]
     text = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=True)
 
     if STOP_SEQUENCE:
-        stop_index = text.find(STOP_SEQUENCE)
-        if stop_index != -1:
-            text = text[:stop_index]
+        cut = text.find(STOP_SEQUENCE)
+        if cut != -1:
+            text = text[:cut]
     return text.strip()
 
-# === Script principal ===
+
+# --- CLI ---------------------------------------------------------------------
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="Generate text using MiniGPT")
-    parser.add_argument("--prompt", type=str, default="Il était une fois", help="Texte de départ ou champ libre")
-    parser.add_argument("--caption", type=str, default=None, help="Caption structurée (si DATASET_TEMPLATE attend ce champ)")
-    parser.add_argument("--instructions", type=str, default=None, help="Instructions structurées (si nécessaires)")
+    parser.add_argument("--prompt", type=str, default="Il était une fois", help="Texte de départ")
+    parser.add_argument("--caption", type=str, default=None, help="Champ structuré optionnel")
+    parser.add_argument("--instructions", type=str, default=None, help="Champ structuré optionnel")
     parser.add_argument("--tokens", type=int, default=100, help="Nombre de tokens à générer")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Température d'échantillonnage")
+    parser.add_argument("--top_k", type=int, default=None, help="Top-k sampling")
+    parser.add_argument("--top_p", type=float, default=None, help="Top-p / nucleus sampling")
+    parser.add_argument("--min_new_tokens", type=int, default=0, help="Génère au moins ce nombre de tokens")
     args = parser.parse_args()
 
     print(f"\n📝 Prompt: {args.prompt}")
-    if args.caption or args.instructions:
-        print("📋 Champs structurés:", end=" ")
-        parts = []
-        if args.caption:
-            parts.append("caption")
-        if args.instructions:
-            parts.append("instructions")
-        print(", ".join(parts))
-    print()
     generated = generate_text(
         args.prompt,
         max_new_tokens=args.tokens,
         caption=args.caption,
-        instructions=args.instructions
+        instructions=args.instructions,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        min_new_tokens=args.min_new_tokens,
     )
-    print("✨ Texte généré :\n")
+    print("\n✨ Texte généré :\n")
     print(generated)
