@@ -321,12 +321,14 @@ for epoch in range(start_epoch, num_epochs):
         # scheduler.step()
         
         if i % 50 == 0:
-            trackio.log({
-                "train/loss": loss.item(),
-                "epoch": epoch + 1,
-                "__step": i,
-                "lr": scheduler.get_last_lr()[0]
-            })  
+            trackio.log(
+                {
+                    "train/loss": loss.item(),
+                    "epoch": epoch + 1,
+                    "lr": scheduler.get_last_lr()[0],
+                },
+                step=i,
+            )
 
         if i % 100 == 0:
             current_lr = scheduler.get_last_lr()[0]
@@ -361,13 +363,15 @@ for epoch in range(start_epoch, num_epochs):
                 if epochs_without_improvement >= patience:
                     print(f"[{now()}] 💡 Consider reducing learning rate or stopping soon (no improvement for {epochs_without_improvement} evals)")
 
-            trackio.log({
-                "val/loss": val_loss,
-                "best_val_loss": best_loss,
-                "epochs_without_improvement": epochs_without_improvement,
-                "epoch": epoch + 1,
-                "global_step": global_step
-            })
+            trackio.log(
+                {
+                    "val/loss": val_loss,
+                    "best_val_loss": best_loss,
+                    "epochs_without_improvement": epochs_without_improvement,
+                    "epoch": epoch + 1,
+                },
+                step=global_step,
+            )
 
             # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
             _, gen_text, gen_text_raw, gen_tokens = generate_example(
