@@ -45,14 +45,6 @@ model = MiniGPT(
     dropout=dropout,
     hidden_dim=hidden_dim
 ).to(device)
-model.eval()
-
-# === Compilation (si dispo) ===
-try:
-    model = torch.compile(model)
-    print("⚙️ Model compiled for optimized inference")
-except Exception:
-    print("⚠️ torch.compile not supported here — running normally")
 
 # === Chargement du checkpoint ===
 if os.path.exists(MODEL_SAVE_PATH):
@@ -64,6 +56,15 @@ if os.path.exists(MODEL_SAVE_PATH):
     print(f"✅ Model loaded from {MODEL_SAVE_PATH}")
 else:
     raise FileNotFoundError(f"❌ No model checkpoint found at {MODEL_SAVE_PATH}")
+
+model.eval()
+
+# === Compilation (si dispo) ===
+try:
+    model = torch.compile(model)
+    print("⚙️ Model compiled for optimized inference")
+except Exception:
+    print("⚠️ torch.compile not supported here — running normally")
 
 # === Génération ===
 class _SafeDict(dict):
