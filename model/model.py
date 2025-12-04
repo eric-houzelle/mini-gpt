@@ -265,7 +265,7 @@ class MiniGPT(nn.Module):
         }
     
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None):
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None, min_new_tokens=0, eos_token_id=None):
         """
         Génération de texte avec contrôle de la diversité.
         
@@ -275,8 +275,10 @@ class MiniGPT(nn.Module):
             temperature: Contrôle la diversité (0.1=conservateur, 1.0=normal, 2.0=créatif)
             top_k: Garde seulement les k tokens les plus probables
             top_p: Nucleus sampling, garde les tokens dont la somme des probas = p
+            min_new_tokens: Génère au moins ce nombre de tokens avant d'autoriser l'arrêt sur eos_token_id
+            eos_token_id: Id du token EOS pour stopper la génération (optionnel)
         """
-        for _ in range(max_new_tokens):
+        for step in range(max_new_tokens):
             idx_cond = idx[:, -self.block_size:]
             logits = self(idx_cond)
             logits = logits[:, -1, :]
@@ -308,5 +310,15 @@ class MiniGPT(nn.Module):
             # Échantillonner
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
+
+            # Éviter un EOS trop tôt
+            if eos_token_id is not None and step < min_new_tokens:
+                while next_token.item() == eos_token_id:
+                    next_token = torch.multinomial(probs, num_samples=1)
+
             idx = torch.cat((idx, next_token), dim=1)
+
+            # Arrêt précoce si EOS après le minimum requis
+            if eos_token_id is not None and step >= min_new_tokens and next_token.item() == eos_token_id:
+                break
         return idx

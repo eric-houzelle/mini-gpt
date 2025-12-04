@@ -13,6 +13,7 @@ from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
 import trackio
 import math
+from string import Formatter
 
 load_dotenv()
 
@@ -25,7 +26,6 @@ DATASET_KEY = os.getenv("DATASET_KEY", "french-tinystories")
 DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
-PROMPT_TEMPLATE = os.getenv("PROMPT_TEMPLATE")
 STOP_SEQUENCE = os.getenv("STOP_SEQUENCE")
 EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il était une fois")
 
@@ -79,10 +79,6 @@ def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def format_prompt(prompt):
-    if PROMPT_TEMPLATE:
-        return PROMPT_TEMPLATE.format(prompt=prompt)
-    return prompt
 
 
 def strip_stop_sequence(text):
@@ -328,34 +324,34 @@ for epoch in range(start_epoch, num_epochs):
 
     
     model.eval()
-    # Exemple de génération aligné avec le format du dataset (<SVG> ... </SVG>)
-    example_prompt = f"Prompt: {EVAL_PROMPT}\n\n<SVG>\n"
-    prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
+    # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
+    if DATASET_TEMPLATE:
+        # Remplir dynamiquement les placeholders présents dans DATASET_TEMPLATE
+        fields = [fname for _, fname, _, _ in Formatter().parse(DATASET_TEMPLATE) if fname]
+        fmt = {}
+        for name in fields:
+            # Par défaut on met EVAL_PROMPT, sauf pour svg que l'on laisse vide
+            fmt[name] = "" if name.lower() == "svg" else EVAL_PROMPT
+        example_prompt = DATASET_TEMPLATE.format_map(_SafeDict(fmt))
+        prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
+    else:
+        example_prompt = None
+        prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
     max_new_tokens = 400
     min_new_tokens = 20  # évite d'échantillonner uniquement l'eos
     temperature = 0.8
     eos_id = tokenizer.eos_token_id
 
     with torch.no_grad():
-        idx = prompt_ids
-        for step in range(max_new_tokens):
-            idx_cond = idx[:, -block_size:]
-            logits = model(idx_cond)[:, -1, :]
-            if temperature != 1.0:
-                logits = logits / temperature
-            probs = torch.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
-
-            # évite d'échantillonner EOS trop tôt
-            if eos_id is not None and step < min_new_tokens:
-                while next_token.item() == eos_id:
-                    next_token = torch.multinomial(probs, num_samples=1)
-
-            idx = torch.cat((idx, next_token), dim=1)
-            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
-                break
-
-        sample = idx[0]
+        sample = model.generate(
+            prompt_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=0.9,
+            top_k=None,
+            min_new_tokens=min_new_tokens,
+            eos_token_id=eos_id
+        )[0]
 
     prompt_len = prompt_ids.shape[-1]
     gen_only = sample[prompt_len:]
