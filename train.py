@@ -61,8 +61,23 @@ def load_tokenizer(tokenizer_name):
 tokenizer = load_tokenizer(TOKENIZER_NAME)
 
 print(f"LOAD DATASET: {DATASET_NAME}")
-dataset = load_dataset(DATASET_NAME)
-train_split_ds = dataset["train"]
+# Support pour les fichiers CSV locaux
+csv_path = None
+if DATASET_NAME.endswith('.csv'):
+    # Chemin relatif ou absolu vers un fichier CSV
+    if os.path.exists(DATASET_NAME):
+        csv_path = DATASET_NAME
+    elif os.path.exists(os.path.abspath(DATASET_NAME)):
+        csv_path = os.path.abspath(DATASET_NAME)
+    
+if csv_path:
+    print(f"📁 Loading local CSV file: {csv_path}")
+    dataset = load_dataset("csv", data_files=csv_path)
+    train_split_ds = dataset["train"]
+    print(f"✅ CSV file loaded successfully")
+else:
+    dataset = load_dataset(DATASET_NAME)
+    train_split_ds = dataset["train"]
 
 if DATASET_TEMPLATE:
     class _SafeDict(dict):

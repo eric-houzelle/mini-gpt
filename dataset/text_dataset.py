@@ -12,9 +12,20 @@ class TextDataset(Dataset):
 
     def __getitem__(self, idx):
         text = self.texts[idx]
-        tokens = self.tokenizer.encode(text, add_special_tokens=True)
-        tokens = tokens[:self.block_size+1] 
-        input_ids = torch.tensor(tokens[:-1])
-        target_ids = torch.tensor(tokens[1:])
-        return input_ids, target_ids
 
+        encoding = self.tokenizer(
+            text,
+            add_special_tokens=True,
+            truncation=True,
+            max_length=self.block_size,   # ⚠️ essentiel
+            padding=False,
+            return_tensors=None
+        )
+
+        tokens = encoding["input_ids"]
+
+        # Séquences LM : x = tokens[:-1], y = tokens[1:]
+        x = torch.tensor(tokens[:-1], dtype=torch.long)
+        y = torch.tensor(tokens[1:], dtype=torch.long)
+
+        return x, y
