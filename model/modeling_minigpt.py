@@ -106,12 +106,15 @@ class MiniGPTForCausalLM(PreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        
-        # Extraire les hidden states
-        if return_dict:
-            hidden_states = outputs.last_hidden_state
+
+
+        if isinstance(outputs, torch.Tensor):
+            hidden_states = outputs
         else:
-            hidden_states = outputs[0]
+            if return_dict:
+                hidden_states = outputs.last_hidden_state
+            else:
+                hidden_states = outputs[0]
         
         # Appliquer la tête de langage
         logits = self.lm_head(hidden_states)
