@@ -9,7 +9,8 @@ import string
 from datasets import load_dataset
 from torch.optim.lr_scheduler import OneCycleLR
 from dataset.text_dataset import TextDataset
-from model.model import MiniGPT
+from model.configuration import MiniGPTConfig
+from model.modeling_minigpt_causal import MiniGPTForCausalLM
 from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
 import trackio
@@ -126,7 +127,7 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
     with torch.no_grad():
         for xb_val, yb_val in val_loader:
             xb_val, yb_val = xb_val.to(device), yb_val.to(device)
-            logits = model(xb_val)
+            logits = model(xb_val).logits
             B, T, C = logits.shape
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
     return total_loss / len(val_loader)
@@ -195,18 +196,22 @@ val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = MiniGPT(
-    len(tokenizer), 
-    block_size, 
-    embed_dim=embed_dim, 
-    depth=depth, 
-    heads=heads, 
-    dropout=dropout, 
+
+# Créer la configuration Hugging Face
+model_config = MiniGPTConfig(
+    vocab_size=len(tokenizer),
+    block_size=block_size,
+    embed_dim=embed_dim,
+    depth=depth,
+    heads=heads,
+    dropout=dropout,
     hidden_dim=hidden_dim,
     weight_sharing=weight_sharing,  # STLM: "none", "ffn" ou "full"
     use_rope=use_rope,  # STLM: RoPE au lieu de learned pos embeddings
     use_gradient_checkpointing=use_gradient_checkpointing
-).to(device)
+)
+
+model = MiniGPTForCausalLM(model_config).to(device)
 
 total_params = sum(p.numel() for p in model.parameters())
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -347,7 +352,7 @@ for epoch in range(start_epoch, num_epochs):
         # loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
         optimizer.zero_grad()
         with torch.amp.autocast("cuda"):
-            logits = model(xb)
+            logits = model(xb).logits
             B, T, C = logits.shape
             loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
 

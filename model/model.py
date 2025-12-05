@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
+from transformers import PreTrainedModel
+from .configuration import MiniGPTConfig
 
 
 class RoPEEmbedding(nn.Module):
@@ -135,20 +137,35 @@ class TransformerBlock(nn.Module):
         """Version avec gradient checkpointing pour économiser VRAM."""
         return self.forward(x, mask)
 
-class MiniGPT(nn.Module):
-    def __init__(self, vocab_size, block_size, embed_dim=256, depth=8, heads=8, dropout = 0.1, hidden_dim = 512, weight_sharing="none", use_rope=True, use_gradient_checkpointing=False):
+class MiniGPT(PreTrainedModel):
+    config_class = MiniGPTConfig
+    
+    def __init__(self, config=None, **kwargs):
         """
+        Initialise le modèle MiniGPT.
+        
         Args:
-            weight_sharing: Type de partage de poids entre les blocs
-                - "none": Pas de partage (comportement par défaut)
-                - "ffn": Partage uniquement les FFN (comme MobiLlama)
-                - "full": Partage FFN + Attention (comme ALBERT, réduction 90-95%)
-            use_rope: Utiliser RoPE embeddings au lieu de positional embeddings appris
-            use_gradient_checkpointing: Activer le gradient checkpointing pour économiser VRAM
-                - True: Économise 50-70% de VRAM, +20-30% temps de calcul
-                - False: VRAM normale, vitesse normale
+            config: Instance de MiniGPTConfig ou None. Si None, les paramètres
+                   doivent être fournis via kwargs.
+            **kwargs: Paramètres du modèle si config n'est pas fourni.
         """
-        super().__init__()
+        # Si config n'est pas fourni, créer une config à partir des kwargs
+        if config is None:
+            config = MiniGPTConfig(**kwargs)
+        
+        super().__init__(config)
+        
+        # Extraire les paramètres de la config
+        vocab_size = config.vocab_size
+        block_size = config.block_size
+        embed_dim = config.embed_dim
+        depth = config.depth
+        heads = config.heads
+        dropout = config.dropout
+        hidden_dim = config.hidden_dim
+        weight_sharing = config.weight_sharing
+        use_rope = config.use_rope
+        use_gradient_checkpointing = config.use_gradient_checkpointing
         self.token_emb = nn.Embedding(vocab_size, embed_dim)
         self.use_rope = use_rope
         self.use_gradient_checkpointing = use_gradient_checkpointing
@@ -161,6 +178,11 @@ class MiniGPT(nn.Module):
         
         self.depth = depth
         self.weight_sharing = weight_sharing
+        self.vocab_size = vocab_size
+        self.block_size = block_size
+        self.embed_dim = embed_dim
+        self.heads = heads
+        self.hidden_dim = hidden_dim
         
         # Créer les blocs selon le type de weight sharing
         if weight_sharing == "none":

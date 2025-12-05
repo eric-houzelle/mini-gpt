@@ -4,7 +4,7 @@ import torch
 import contextlib
 from transformers import AutoTokenizer
 from dotenv import load_dotenv
-from model.model import MiniGPT
+from model import MiniGPT, MiniGPTConfig
 
 # --- Environment & config ----------------------------------------------------
 load_dotenv()
@@ -45,9 +45,9 @@ tokenizer = load_tokenizer(TOKENIZER_NAME)
 
 # --- Model -------------------------------------------------------------------
 model_cfg = config["model"]
-model = MiniGPT(
-    len(tokenizer),
-    model_cfg["block_size"],
+model_config = MiniGPTConfig(
+    vocab_size=len(tokenizer),
+    block_size=model_cfg["block_size"],
     embed_dim=model_cfg["embed_dim"],
     depth=model_cfg["depth"],
     heads=model_cfg["heads"],
@@ -56,7 +56,8 @@ model = MiniGPT(
     weight_sharing=model_cfg.get("weight_sharing", "none"),
     use_rope=model_cfg.get("use_rope", True),
     use_gradient_checkpointing=False,  # inference: no checkpointing
-).to(device)
+)
+model = MiniGPT(model_config).to(device)
 
 if os.path.exists(MODEL_SAVE_PATH):
     checkpoint = torch.load(MODEL_SAVE_PATH, map_location=device)
