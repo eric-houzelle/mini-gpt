@@ -107,10 +107,13 @@ def now():
 def collate_fn(batch):
     xs, ys = zip(*batch)
 
-    max_len = block_size - 1  # x = tokens[:-1]
-
+    max_len = block_size - 1 
     pad_id = tokenizer.pad_token_id
-
+    
+    # Tronquer et pad pour garantir une longueur fixe (évite les formes dynamiques CUDAGraph)
+    xs = [x[:max_len] if len(x) > max_len else x for x in xs]
+    ys = [y[:max_len] if len(y) > max_len else y for y in ys]
+    
     xs = [torch.nn.functional.pad(x, (0, max_len - len(x)), value=pad_id) for x in xs]
     ys = [torch.nn.functional.pad(y, (0, max_len - len(y)), value=pad_id) for y in ys]
 
@@ -153,6 +156,15 @@ def generate_example(model, tokenizer, block_size, device, dataset_template, eva
         idx = prompt_ids
         for step in range(max_new_tokens):
             idx_cond = idx[:, -block_size:]
+            if idx_cond.size(1) < block_size:
+                pad_len = block_size - idx_cond.size(1)
+                pad = torch.full(
+                    (idx_cond.size(0), pad_len),
+                    tokenizer.pad_token_id,
+                    device=idx_cond.device,
+                    dtype=idx_cond.dtype,
+                )
+                idx_cond = torch.cat([pad, idx_cond], dim=1)
             logits = model(idx_cond)[:, -1, :]
             if temperature != 1.0:
                 logits = logits / temperature
