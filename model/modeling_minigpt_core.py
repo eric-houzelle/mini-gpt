@@ -97,3 +97,30 @@ class MiniGPTModel(nn.Module):
                     x = block(x, mask)
 
         return self.ln_f(x)
+    
+    def count_parameters(self):
+        """Compte le nombre de paramètres selon le type de weight sharing et l’utilisation de RoPE."""
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+        token_emb_params = self.token_emb.weight.numel()
+        pos_emb_params = self.pos_emb.weight.numel() if self.pos_emb is not None else 0
+        embedding_params = token_emb_params + pos_emb_params
+
+        if self.weight_sharing == "full":
+            block_params = sum(p.numel() for p in self.shared_block.parameters())
+        else:
+            block_params = sum(p.numel() for p in self.blocks.parameters())
+
+        return {
+            "total": total,
+            "trainable": trainable,
+            "embedding": embedding_params,
+            "token_emb": token_emb_params,
+            "pos_emb": pos_emb_params,
+            "blocks": block_params,
+            "head": 0,
+            "weight_sharing": self.weight_sharing,
+            "use_rope": self.use_rope
+        }
+
