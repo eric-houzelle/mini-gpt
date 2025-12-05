@@ -78,25 +78,12 @@ class MiniGPTForCausalLM(PreTrainedModel):
         return_dict=None,
         **kwargs
     ):
-        """
-        Forward pass du modèle complet avec la tête de langage.
-        
-        Args:
-            input_ids: Tokens d'entrée [batch, seq_len]
-            attention_mask: Masque d'attention (optionnel)
-            labels: Labels pour le calcul de la loss [batch, seq_len]
-            past_key_values: Cache pour la génération (non implémenté)
-            use_cache: Utiliser le cache (non implémenté)
-            output_attentions: Retourner les attentions (non implémenté)
-            output_hidden_states: Retourner les hidden states (non implémenté)
-            return_dict: Retourner un dict au lieu d'un tuple
-        
-        Returns:
-            CausalLMOutputWithPast ou tuple selon return_dict
-        """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        
-        # Forward pass du modèle core
+
+        if input_ids is None:
+            raise ValueError("input_ids doit être fourni")
+
+        # Appel au modèle core
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -108,37 +95,50 @@ class MiniGPTForCausalLM(PreTrainedModel):
         )
 
 
+        # 1) Récupérer hidden_states
         if isinstance(outputs, torch.Tensor):
             hidden_states = outputs
+            pkv = None
+            hs_all = None
+            attn = None
         else:
             if return_dict:
                 hidden_states = outputs.last_hidden_state
+                pkv = getattr(outputs, "past_key_values", None)
+                hs_all = getattr(outputs, "hidden_states", None)
+                attn = getattr(outputs, "attentions", None)
             else:
                 hidden_states = outputs[0]
-        
-        # Appliquer la tête de langage
+                # on ne se prend pas la tête pour pkv/hs/attn en mode tuple
+                pkv = None
+                hs_all = None
+                attn = None
+
+        # 2) Tête LM
         logits = self.lm_head(hidden_states)
-        
+
+        # 3) Loss optionnelle
         loss = None
         if labels is not None:
-            # Décaler les labels pour l'alignement avec les logits
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            # Flatten les tokens
             loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-        
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)),
+                            shift_labels.view(-1))
+
+        # 4) Sortie compat HF
         if not return_dict:
-            output = (logits,) + outputs[1:]
+            output = (logits,)
             return ((loss,) + output) if loss is not None else output
-        
+
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            past_key_values=pkv,
+            hidden_states=hs_all,
+            attentions=attn,
         )
+
     
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         """Prépare les inputs pour la génération."""
