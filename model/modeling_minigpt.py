@@ -209,3 +209,7 @@ class MiniGPTForCausalLM(PreTrainedModel):
                 break
         
         return idx
+    
+    def count_parameters(self):
+        """Délègue au modèle core MiniGPTModel."""
+        return self.model.count_parameters()
