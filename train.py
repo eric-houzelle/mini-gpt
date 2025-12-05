@@ -10,7 +10,7 @@ from datasets import load_dataset
 from torch.optim.lr_scheduler import OneCycleLR
 from dataset.text_dataset import TextDataset
 from model.configuration import MiniGPTConfig
-from model.modeling_minigpt_causal import MiniGPTForCausalLM
+from model.modeling_minigpt import MiniGPTForCausalLM
 from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
 import trackio
