@@ -3,8 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from .layers import RoPEEmbedding, SwiGLU, SelfAttention, TransformerBlock
-from .configuration_minigpt import MiniGPTConfig
+from .model import RoPEEmbedding, SwiGLU, SelfAttention, TransformerBlock
+
+from .configuration import MiniGPTConfig
 
 
 class MiniGPTModel(nn.Module):
