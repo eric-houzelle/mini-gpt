@@ -71,7 +71,8 @@ class MiniGPTModel(nn.Module):
     def get_output_embeddings(self):
         return None
 
-    def forward(self, input_ids):
+    def forward(self, input_ids=None, attention_mask=None, **kwargs):
+        del attention_mask
         B, T = input_ids.shape
         x = self.token_emb(input_ids)
 
