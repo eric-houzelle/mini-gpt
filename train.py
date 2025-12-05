@@ -106,9 +106,15 @@ def now():
 
 def collate_fn(batch):
     xs, ys = zip(*batch)
-    xs = pad_sequence(xs, batch_first=True, padding_value=tokenizer.pad_token_id)
-    ys = pad_sequence(ys, batch_first=True, padding_value=tokenizer.pad_token_id)
-    return xs, ys
+
+    max_len = block_size - 1  # x = tokens[:-1]
+
+    pad_id = tokenizer.pad_token_id
+
+    xs = [torch.nn.functional.pad(x, (0, max_len - len(x)), value=pad_id) for x in xs]
+    ys = [torch.nn.functional.pad(y, (0, max_len - len(y)), value=pad_id) for y in ys]
+
+    return torch.stack(xs), torch.stack(ys)
 
 def compute_validation_loss(model, val_loader, loss_fn, device):
     """Calcule la loss de validation moyenne sur l'ensemble du loader."""
