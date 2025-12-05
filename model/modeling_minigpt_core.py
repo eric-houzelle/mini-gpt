@@ -61,6 +61,15 @@ class MiniGPTModel(nn.Module):
             self.blocks = None
 
         self.ln_f = nn.LayerNorm(embed_dim)
+        
+    def get_input_embeddings(self):
+        return self.token_emb
+
+    def set_input_embeddings(self, value):
+        self.token_emb = value
+        
+    def get_output_embeddings(self):
+        return None
 
     def forward(self, input_ids):
         B, T = input_ids.shape
