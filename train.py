@@ -32,6 +32,7 @@ num_epochs = config["training"]["num_epochs"]
 batch_size = config["training"]["batch_size"]
 learning_rate = config["training"]["learning_rate"]
 warmup = config["training"]["warmup"]
+override_lr = os.getenv("OVERRIDE_LR") or config["training"].get("override_lr")
 
 embed_dim = config["model"]["embed_dim"]
 depth = config["model"]["depth"]
@@ -278,6 +279,15 @@ scheduler = cosine_with_warmup(
 
 if scheduler_state_dict is not None:
     scheduler.load_state_dict(scheduler_state_dict)
+
+# Option d'override du LR lors d'une reprise : on garde l'état optimizer/scheduler
+# mais on force la nouvelle base de LR pour tous les param_groups et le scheduler.
+if override_lr is not None:
+    override_lr = float(override_lr)
+    for pg in optimizer.param_groups:
+        pg["lr"] = override_lr
+    scheduler.base_lrs = [override_lr] * len(optimizer.param_groups)
+    print(f"🔧 Override LR actif -> nouveau LR de base: {override_lr}")
 
 trackio.init(
     project="mini-gpt-1511-v5",
