@@ -166,7 +166,7 @@ def generate_example(model, tokenizer, block_size, device, dataset_template, eva
                     dtype=idx_cond.dtype,
                 )
                 idx_cond = torch.cat([pad, idx_cond], dim=1)
-            logits = model(idx_cond)[:, -1, :]
+            logits = model(idx_cond).logits[:, -1, :]
             if temperature != 1.0:
                 logits = logits / temperature
             probs = torch.softmax(logits, dim=-1)

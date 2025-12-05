@@ -94,49 +94,40 @@ class MiniGPTForCausalLM(PreTrainedModel):
             return_dict=return_dict,
         )
 
-
-        # 1) Récupérer hidden_states
-        if isinstance(outputs, torch.Tensor):
-            hidden_states = outputs
-            pkv = None
-            hs_all = None
-            attn = None
+        # Extraire les hidden states selon le format de retour
+        if return_dict:
+            hidden_states = outputs.last_hidden_state
         else:
-            if return_dict:
-                hidden_states = outputs.last_hidden_state
-                pkv = getattr(outputs, "past_key_values", None)
-                hs_all = getattr(outputs, "hidden_states", None)
-                attn = getattr(outputs, "attentions", None)
-            else:
-                hidden_states = outputs[0]
-                # on ne se prend pas la tête pour pkv/hs/attn en mode tuple
-                pkv = None
-                hs_all = None
-                attn = None
+            hidden_states = outputs[0]
 
-        # 2) Tête LM
+        # Appliquer la tête de langage
         logits = self.lm_head(hidden_states)
 
-        # 3) Loss optionnelle
+        # Calculer la loss si labels fournis
         loss = None
         if labels is not None:
+            # Shift logits et labels pour l'alignement (prédire le token suivant)
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)),
-                            shift_labels.view(-1))
+            loss = loss_fct(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1)
+            )
 
-        # 4) Sortie compat HF
+        # Format de sortie selon return_dict
         if not return_dict:
             output = (logits,)
-            return ((loss,) + output) if loss is not None else output
+            if loss is not None:
+                return (loss,) + output
+            return output
 
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
-            past_key_values=pkv,
-            hidden_states=hs_all,
-            attentions=attn,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
         )
 
     

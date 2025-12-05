@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
+from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from .model import RoPEEmbedding, SwiGLU, SelfAttention, TransformerBlock
 
@@ -71,8 +72,46 @@ class MiniGPTModel(nn.Module):
     def get_output_embeddings(self):
         return None
 
-    def forward(self, input_ids=None, attention_mask=None, **kwargs):
-        del attention_mask
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        past_key_values=None,
+        use_cache=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        **kwargs
+    ):
+        """
+        Forward pass du modèle core.
+        
+        Args:
+            input_ids: Tokens d'entrée [batch_size, seq_len]
+            attention_mask: Masque d'attention (non utilisé pour l'instant)
+            past_key_values: Cache KV pour génération (non supporté pour l'instant)
+            use_cache: Si True, retourne past_key_values (non supporté pour l'instant)
+            output_attentions: Si True, retourne les attentions (non supporté pour l'instant)
+            output_hidden_states: Si True, retourne tous les hidden states (non supporté pour l'instant)
+            return_dict: Si True, retourne un BaseModelOutputWithPast, sinon un tuple
+        
+        Returns:
+            BaseModelOutputWithPast si return_dict=True, sinon tuple (hidden_states,)
+        """
+        return_dict = return_dict if return_dict is not None else True
+        
+        # Pour l'instant, on ignore ces paramètres (non supportés pour l'instant)
+        # On les ignore silencieusement pour la compatibilité avec l'écosystème Hugging Face
+        if past_key_values is not None:
+            # TODO: Implémenter le support de past_key_values pour la génération efficace
+            pass
+        if output_attentions:
+            # TODO: Implémenter le retour des attentions
+            pass
+        if output_hidden_states:
+            # TODO: Implémenter le retour de tous les hidden states
+            pass
+        
         B, T = input_ids.shape
         x = self.token_emb(input_ids)
 
@@ -97,7 +136,17 @@ class MiniGPTModel(nn.Module):
                 for block in self.blocks:
                     x = block(x, mask)
 
-        return self.ln_f(x)
+        hidden_states = self.ln_f(x)
+        
+        if not return_dict:
+            return (hidden_states,)
+        
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=None,
+            hidden_states=None,
+            attentions=None,
+        )
     
     def count_parameters(self):
         """Compte le nombre de paramètres selon le type de weight sharing et l’utilisation de RoPE."""
