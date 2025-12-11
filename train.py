@@ -219,16 +219,13 @@ trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 # Afficher les stats détaillées du modèle
 model_stats = model.count_parameters()
 
-def cosine_with_warmup(optimizer, warmup_steps, total_steps, min_lr_ratio=0.1):
+    
+def warmup_then_constant(optimizer, warmup_steps):
     def lr_lambda(step):
         if step < warmup_steps:
             return step / warmup_steps
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        cosine = 0.5 * (1 + math.cos(math.pi * progress))
-        return max(min_lr_ratio, cosine)
-    
+        return 1.0  # LR = learning_rate
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
 
 def human_readable(num):
     if num >= 1e9:
@@ -308,12 +305,7 @@ else:
     print(f"\n🆕 Starting fresh training")
 
 total_steps = num_epochs * len(train_loader)
-scheduler = cosine_with_warmup(
-    optimizer,
-    warmup_steps=warmup,
-    total_steps=total_steps,
-    min_lr_ratio=0.1
-)
+scheduler = warmup_then_constant(optimizer, warmup_steps=warmup)
 
 if scheduler_state_dict is not None:
     scheduler.load_state_dict(scheduler_state_dict)
