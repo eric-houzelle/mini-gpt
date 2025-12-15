@@ -4,7 +4,7 @@ import torch
 from datetime import datetime
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, top_k_top_p_filtering
+from transformers import AutoTokenizer
 import string
 from datasets import load_dataset
 from torch.optim.lr_scheduler import OneCycleLR
@@ -139,6 +139,37 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
             B, T, C = logits.shape
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
     return total_loss / len(val_loader)
+
+def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("Inf")):
+    """Filtre les logits selon top-k et/ou top-p.
+    Args:
+        logits: Tensor des logits (shape: [batch_size, vocab_size])
+        top_k: Nombre de tokens à garder (0 = désactivé)
+        top_p: Probabilité cumulative maximale à garder (1.0 = désactivé)
+        filter_value: Valeur à assigner aux logits filtrés
+    """
+    if top_k > 0:
+        # Garde seulement les top-k logits
+        top_k = min(top_k, logits.size(-1))
+        values, _ = torch.topk(logits, top_k)
+        min_values = values[:, -1].unsqueeze(1).expand_as(logits)
+        logits = torch.where(logits < min_values, filter_value, logits)
+
+    if top_p < 1.0:
+        # Garde les logits dont la probabilité cumulative <= top_p
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+
+        # Supprime les logits dont la prob cumulative > top_p
+        sorted_indices_to_remove = cumulative_probs > top_p
+        # Shift the indices to the right to keep also the first token above the threshold
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = 0
+
+        # Scatter les indices à supprimer
+        indices_to_remove = sorted_indices[sorted_indices_to_remove]
+        logits[..., indices_to_remove] = filter_value
+    return logits
 
 def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=60, min_new_tokens=20, temperature=0.7, top_k=50, top_p=0.9):
     """Génère un exemple de texte pour les logs d'entraînement."""
