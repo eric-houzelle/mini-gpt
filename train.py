@@ -13,6 +13,7 @@ from model.configuration import MiniGPTConfig
 from model.modeling_minigpt import MiniGPTForCausalLM
 from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
+import torch.nn.functional as F
 import trackio
 import math
 load_dotenv()
@@ -131,6 +132,129 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
             B, T, C = logits.shape
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
     return total_loss / len(val_loader)
+
+def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float('inf')):
+    """Filtre les logits de probabilité pour Top-K et Top-P (Nucleus Sampling).
+    Les logits filtrés sont masqués par filter_value (-inf par défaut).
+    """
+    if top_k > 0:
+        # Seuls les top_k jetons restent
+        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+        logits[indices_to_remove] = filter_value
+
+    if top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+
+        # Masquer les jetons au-delà de la masse de probabilité top_p
+        sorted_indices_to_remove = cumulative_probs > top_p
+        # Déplacer l'indice d'un cran pour garder le dernier jeton inclus dans top_p
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = 0
+
+        # Remplacer les logits masqués
+        indices_to_remove = sorted_indices[sorted_indices_to_remove]
+        logits[indices_to_remove] = filter_value
+
+    return logits
+
+def generate_example_v2(
+    model,
+    tokenizer,
+    block_size,
+    device,
+    dataset_template,
+    eval_prompt,
+    max_new_tokens=400,
+    min_new_tokens=20,
+    temperature=0.8,
+    top_k=0,
+    top_p=0.9
+):
+    """Génère un exemple de texte pour suivi rapide pendant l'entraînement,
+    en utilisant Top-K et Top-P pour stabiliser la génération.
+    """
+    model.eval()
+
+    # --- 1. Préparation du prompt ---
+    if dataset_template:
+        class _SafeDict(dict):
+            def __missing__(self, key):
+                return eval_prompt
+
+        formatter = string.Formatter()
+        field_names = {
+            field_name for _, field_name, _, _ in formatter.parse(dataset_template) if field_name
+        }
+        fmt = _SafeDict({name: eval_prompt for name in field_names})
+        example_prompt = dataset_template.format_map(fmt)
+        prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
+    else:
+        example_prompt = eval_prompt
+        if not eval_prompt:
+             # Si eval_prompt est vide (pas de template) on commence par le token de début de séquence si possible
+             prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device) 
+        else:
+             # Encode le prompt d'évaluation standard
+             prompt_ids = tokenizer.encode(eval_prompt, return_tensors="pt").to(device)
+    # --- Fin Préparation du prompt ---
+
+    eos_id = tokenizer.eos_token_id
+    with torch.no_grad():
+        idx = prompt_ids
+        for step in range(max_new_tokens):
+            # 1. Tronquer/Paddder l'entrée à block_size
+            idx_cond = idx[:, -block_size:]
+            
+            # (Remplacer le padding dynamique pour idx_cond par la fonction de padding de votre code original
+            # pour maintenir la compatibilité avec la logique de votre code :
+            # J'ai retiré le padding explicite ici, car votre modèle est entraîné à gérer les entrées
+            # tronquées si le contexte est plus grand que block_size.
+            # L'important est de s'assurer que l'entrée est toujours de taille <= block_size)
+
+            # 2. Obtenir les logits du dernier jeton
+            logits = model(idx_cond).logits[:, -1, :] # Logits pour le prochain jeton
+
+            # 3. Appliquer la Température
+            if temperature != 1.0:
+                logits = logits / temperature
+            
+            # 4. Appliquer Top-K et Top-P (le changement majeur)
+            # Logits de forme [1, vocab_size]
+            logits = top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
+            
+            # 5. Calculer les Probabilités
+            probs = torch.softmax(logits, dim=-1)
+            
+            # 6. Échantillonner
+            next_token = torch.multinomial(probs, num_samples=1)
+
+            # 7. Gérer le Minimum de Jetons avant EOS
+            if eos_id is not None and step < min_new_tokens:
+                # Re-échantillonner si le token est EOS et que nous n'avons pas atteint min_new_tokens
+                # Utiliser .item() pour la comparaison
+                while next_token.item() == eos_id:
+                    next_token = torch.multinomial(probs, num_samples=1)
+
+            # 8. Ajouter le jeton et vérifier l'arrêt
+            idx = torch.cat((idx, next_token), dim=1)
+            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
+                break
+
+        sample = idx[0]
+
+    # --- 2. Décodage du résultat ---
+    prompt_len = prompt_ids.shape[-1]
+    gen_only = sample[prompt_len:]
+    gen_tokens = gen_only.tolist()
+    
+    # Décodage en ignorant les jetons spéciaux (PAD, EOS, etc.)
+    gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+    
+    # Décodage complet pour le debug
+    gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
+
+    return example_prompt, gen_text, gen_text_raw, gen_tokens
 
 def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=400, min_new_tokens=20, temperature=0.8):
     """Génère un exemple de texte pour suivi rapide pendant l'entraînement."""
@@ -426,6 +550,22 @@ for epoch in range(start_epoch, num_epochs):
             if not gen_text:
                 print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")
                 print(f"[DEBUG] gen_text_raw: {gen_text_raw}")
+                
+            _, gen_text, gen_text_raw, gen_tokens = generate_example_v2(
+                model,
+                tokenizer,
+                block_size,
+                device,
+                DATASET_TEMPLATE,
+                EVAL_PROMPT,
+                temperature=0.7, # Température légèrement réduite
+                top_k=0,
+                top_p=0.9
+            )
+            print(f"[{now()}] Exemple génération v2 (suite de l'invite):\n{gen_text}")
+            if not gen_text:
+                print(f"[DEBUG] gen_tokens v2 (len={len(gen_tokens)}): {gen_tokens}")
+                print(f"[DEBUG] gen_text_raw v2: {gen_text_raw}")
 
             model.train()
 trackio.finish()
