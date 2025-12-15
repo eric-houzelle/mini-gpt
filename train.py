@@ -269,64 +269,7 @@ def generate_example_v2(
 
     return example_prompt, gen_text, gen_text_raw, gen_tokens
 
-def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=400, min_new_tokens=20, temperature=0.8):
-    """Génère un exemple de texte pour suivi rapide pendant l'entraînement."""
-    model.eval()
 
-    if dataset_template:
-        class _SafeDict(dict):
-            def __missing__(self, key):
-                return eval_prompt  
-
-        formatter = string.Formatter()
-        field_names = {
-            field_name for _, field_name, _, _ in formatter.parse(dataset_template) if field_name
-        }
-        fmt = _SafeDict({name: eval_prompt for name in field_names})
-        example_prompt = dataset_template.format_map(fmt)
-        prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
-    else:
-        example_prompt = None
-        prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
-
-    eos_id = tokenizer.eos_token_id
-    with torch.no_grad():
-        idx = prompt_ids
-        for step in range(max_new_tokens):
-            idx_cond = idx[:, -block_size:]
-            if idx_cond.size(1) < block_size:
-                pad_len = block_size - idx_cond.size(1)
-                pad = torch.full(
-                    (idx_cond.size(0), pad_len),
-                    tokenizer.pad_token_id,
-                    device=idx_cond.device,
-                    dtype=idx_cond.dtype,
-                )
-                idx_cond = torch.cat([pad, idx_cond], dim=1)
-            logits = model(idx_cond).logits[:, -1, :]
-            if temperature != 1.0:
-                logits = logits / temperature
-            probs = torch.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
-
-            # Évite d'échantillonner EOS trop tôt
-            if eos_id is not None and step < min_new_tokens:
-                while next_token.item() == eos_id:
-                    next_token = torch.multinomial(probs, num_samples=1)
-
-            idx = torch.cat((idx, next_token), dim=1)
-            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
-                break
-
-        sample = idx[0]
-
-    prompt_len = prompt_ids.shape[-1]
-    gen_only = sample[prompt_len:]
-    gen_tokens = gen_only.tolist()
-    gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
-    gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
-
-    return example_prompt, gen_text, gen_text_raw, gen_tokens
 
 train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
@@ -549,20 +492,6 @@ for epoch in range(start_epoch, num_epochs):
                 },
                 step=global_step,
             )
-
-            # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
-            _, gen_text, gen_text_raw, gen_tokens = generate_example(
-                model,
-                tokenizer,
-                block_size,
-                device,
-                DATASET_TEMPLATE,
-                EVAL_PROMPT
-            )
-            print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
-            if not gen_text:
-                print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")
-                print(f"[DEBUG] gen_text_raw: {gen_text_raw}")
                 
             _, gen_text, gen_text_raw, gen_tokens = generate_example_v2(
                 model,
