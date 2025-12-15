@@ -9,7 +9,8 @@ import string
 from datasets import load_dataset
 from torch.optim.lr_scheduler import OneCycleLR
 from dataset.text_dataset import TextDataset
-from model.model import MiniGPT
+from model.configuration import MiniGPTConfig
+from model.modeling_minigpt import MiniGPTForCausalLM
 from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
 import trackio
@@ -69,7 +70,7 @@ if DATASET_NAME.endswith('.csv'):
         csv_path = DATASET_NAME
     elif os.path.exists(os.path.abspath(DATASET_NAME)):
         csv_path = os.path.abspath(DATASET_NAME)
-    
+
 if csv_path:
     print(f"📁 Loading local CSV file: {csv_path}")
     dataset = load_dataset("csv", data_files=csv_path)
@@ -109,11 +110,11 @@ def collate_fn(batch):
 
     max_len = block_size - 1 
     pad_id = tokenizer.pad_token_id
-    
+
     # Tronquer et pad pour garantir une longueur fixe (évite les formes dynamiques CUDAGraph)
     xs = [x[:max_len] if len(x) > max_len else x for x in xs]
     ys = [y[:max_len] if len(y) > max_len else y for y in ys]
-    
+
     xs = [torch.nn.functional.pad(x, (0, max_len - len(x)), value=pad_id) for x in xs]
     ys = [torch.nn.functional.pad(y, (0, max_len - len(y)), value=pad_id) for y in ys]
 
@@ -126,7 +127,7 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
     with torch.no_grad():
         for xb_val, yb_val in val_loader:
             xb_val, yb_val = xb_val.to(device), yb_val.to(device)
-            logits = model(xb_val)
+            logits = model(xb_val).logits
             B, T, C = logits.shape
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
     return total_loss / len(val_loader)
@@ -165,7 +166,7 @@ def generate_example(model, tokenizer, block_size, device, dataset_template, eva
                     dtype=idx_cond.dtype,
                 )
                 idx_cond = torch.cat([pad, idx_cond], dim=1)
-            logits = model(idx_cond)[:, -1, :]
+            logits = model(idx_cond).logits[:, -1, :]
             if temperature != 1.0:
                 logits = logits / temperature
             probs = torch.softmax(logits, dim=-1)
@@ -195,18 +196,22 @@ val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = MiniGPT(
-    len(tokenizer), 
-    block_size, 
-    embed_dim=embed_dim, 
-    depth=depth, 
-    heads=heads, 
-    dropout=dropout, 
+
+# Créer la configuration Hugging Face
+model_config = MiniGPTConfig(
+    vocab_size=len(tokenizer),
+    block_size=block_size,
+    embed_dim=embed_dim,
+    depth=depth,
+    heads=heads,
+    dropout=dropout,
     hidden_dim=hidden_dim,
     weight_sharing=weight_sharing,  # STLM: "none", "ffn" ou "full"
     use_rope=use_rope,  # STLM: RoPE au lieu de learned pos embeddings
     use_gradient_checkpointing=use_gradient_checkpointing
-).to(device)
+)
+
+model = MiniGPTForCausalLM(model_config).to(device)
 
 total_params = sum(p.numel() for p in model.parameters())
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -214,14 +219,11 @@ trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 # Afficher les stats détaillées du modèle
 model_stats = model.count_parameters()
 
-def cosine_with_warmup(optimizer, warmup_steps, total_steps, min_lr_ratio=0.1):
+def warmup_then_constant(optimizer, warmup_steps):
     def lr_lambda(step):
         if step < warmup_steps:
             return step / warmup_steps
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        cosine = 0.5 * (1 + math.cos(math.pi * progress))
-        return max(min_lr_ratio, cosine)
-    
+        return 1.0  # LR = learning_rate
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
@@ -303,12 +305,8 @@ else:
     print(f"\n🆕 Starting fresh training")
 
 total_steps = num_epochs * len(train_loader)
-scheduler = cosine_with_warmup(
-    optimizer,
-    warmup_steps=warmup,
-    total_steps=total_steps,
-    min_lr_ratio=0.1
-)
+
+scheduler = warmup_then_constant(optimizer, warmup_steps=warmup)
 
 if scheduler_state_dict is not None:
     scheduler.load_state_dict(scheduler_state_dict)
@@ -347,7 +345,7 @@ for epoch in range(start_epoch, num_epochs):
         # loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
         optimizer.zero_grad()
         with torch.amp.autocast("cuda"):
-            logits = model(xb)
+            logits = model(xb).logits
             B, T, C = logits.shape
             loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
 
@@ -356,12 +354,12 @@ for epoch in range(start_epoch, num_epochs):
         scaler.update()
         scheduler.step()
         global_step += 1 
-        
+
         ## without amp scaler
         # loss.backward() 
         # optimizer.step()
         # scheduler.step()
-        
+
         if i % 50 == 0:
             trackio.log(
                 {
