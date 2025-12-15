@@ -14,7 +14,6 @@ from model.modeling_minigpt import MiniGPTForCausalLM
 from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
 import trackio
-import random
 import math
 load_dotenv()
 
@@ -28,13 +27,6 @@ DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
 EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il est principalement connu")
-EVAL_PROMPTS = [
-    "Il est principalement connu",
-    "La solution à ce problème est",
-    "Dans un laboratoire secret",
-    "Les Etats-Unis sont",
-    "Tout a changé quand",
-]
 EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "500"))
 
 num_epochs = config["training"]["num_epochs"]
@@ -78,7 +70,7 @@ if DATASET_NAME.endswith('.csv'):
         csv_path = DATASET_NAME
     elif os.path.exists(os.path.abspath(DATASET_NAME)):
         csv_path = os.path.abspath(DATASET_NAME)
-    
+
 if csv_path:
     print(f"📁 Loading local CSV file: {csv_path}")
     dataset = load_dataset("csv", data_files=csv_path)
@@ -118,11 +110,11 @@ def collate_fn(batch):
 
     max_len = block_size - 1 
     pad_id = tokenizer.pad_token_id
-    
+
     # Tronquer et pad pour garantir une longueur fixe (évite les formes dynamiques CUDAGraph)
     xs = [x[:max_len] if len(x) > max_len else x for x in xs]
     ys = [y[:max_len] if len(y) > max_len else y for y in ys]
-    
+
     xs = [torch.nn.functional.pad(x, (0, max_len - len(x)), value=pad_id) for x in xs]
     ys = [torch.nn.functional.pad(y, (0, max_len - len(y)), value=pad_id) for y in ys]
 
@@ -140,62 +132,39 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
     return total_loss / len(val_loader)
 
-def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("Inf")):
-    """Filtre les logits selon top-k et/ou top-p.
-    Args:
-        logits: Tensor des logits (shape: [batch_size, vocab_size])
-        top_k: Nombre de tokens à garder (0 = désactivé)
-        top_p: Probabilité cumulative maximale à garder (1.0 = désactivé)
-        filter_value: Valeur à assigner aux logits filtrés
-    """
-    if top_k > 0:
-        # Garde seulement les top-k logits
-        top_k = min(top_k, logits.size(-1))
-        values, _ = torch.topk(logits, top_k)
-        min_values = values[:, -1].unsqueeze(1).expand_as(logits)
-        logits = torch.where(logits < min_values, filter_value, logits)
-
-    if top_p < 1.0:
-        # Garde les logits dont la probabilité cumulative <= top_p
-        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-        cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
-
-        # Supprime les logits dont la prob cumulative > top_p
-        sorted_indices_to_remove = cumulative_probs > top_p
-        # Shift the indices to the right to keep also the first token above the threshold
-        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-        sorted_indices_to_remove[..., 0] = 0
-
-        # Scatter les indices à supprimer
-        indices_to_remove = sorted_indices[sorted_indices_to_remove]
-        logits[..., indices_to_remove] = filter_value
-    return logits
-
-def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=60, temperature=0.7):
-    """Génération simple et stable (comme avant les modifications)."""
+def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=400, min_new_tokens=20, temperature=0.8):
+    """Génère un exemple de texte pour suivi rapide pendant l'entraînement."""
     model.eval()
 
-    # Préparation du prompt
     if dataset_template:
         class _SafeDict(dict):
             def __missing__(self, key):
-                return eval_prompt
-        fmt = _SafeDict({name: eval_prompt for name in string.Formatter().parse(dataset_template)[0][1:] if name})
+                return eval_prompt  
+
+        formatter = string.Formatter()
+        field_names = {
+            field_name for _, field_name, _, _ in formatter.parse(dataset_template) if field_name
+        }
+        fmt = _SafeDict({name: eval_prompt for name in field_names})
         example_prompt = dataset_template.format_map(fmt)
+        prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
     else:
-        example_prompt = eval_prompt
+        example_prompt = None
+        prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
 
-    prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
     eos_id = tokenizer.eos_token_id
-
-    # Génération basique (sans top_k/top_p)
     with torch.no_grad():
         idx = prompt_ids
         for step in range(max_new_tokens):
             idx_cond = idx[:, -block_size:]
             if idx_cond.size(1) < block_size:
                 pad_len = block_size - idx_cond.size(1)
-                pad = torch.full((idx_cond.size(0), pad_len), tokenizer.pad_token_id, device=device, dtype=idx_cond.dtype)
+                pad = torch.full(
+                    (idx_cond.size(0), pad_len),
+                    tokenizer.pad_token_id,
+                    device=idx_cond.device,
+                    dtype=idx_cond.dtype,
+                )
                 idx_cond = torch.cat([pad, idx_cond], dim=1)
             logits = model(idx_cond).logits[:, -1, :]
             if temperature != 1.0:
@@ -203,26 +172,24 @@ def generate_example(model, tokenizer, block_size, device, dataset_template, eva
             probs = torch.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
-            # Évite EOS trop tôt
-            if eos_id is not None and step < 20 and next_token.item() == eos_id:
-                next_token = torch.multinomial(probs, num_samples=1)  # Rééchantillonne si EOS trop tôt
+            # Évite d'échantillonner EOS trop tôt
+            if eos_id is not None and step < min_new_tokens:
+                while next_token.item() == eos_id:
+                    next_token = torch.multinomial(probs, num_samples=1)
 
             idx = torch.cat((idx, next_token), dim=1)
-            if eos_id is not None and next_token.item() == eos_id:
+            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
                 break
 
-    # Décodage
+        sample = idx[0]
+
     prompt_len = prompt_ids.shape[-1]
-    gen_tokens = idx[0, prompt_len:].tolist()
+    gen_only = sample[prompt_len:]
+    gen_tokens = gen_only.tolist()
     gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+    gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
 
-    print(f"\n[Exemple de génération]")
-    print(f"Prompt: {example_prompt}")
-    print(f"Génération: {gen_text}")
-    print(f"  - Longueur: {len(gen_tokens)} tokens")
-
-    return example_prompt, gen_text, gen_text, gen_tokens  # Simplifié
-
+    return example_prompt, gen_text, gen_text_raw, gen_tokens
 
 train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
@@ -252,13 +219,13 @@ trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 # Afficher les stats détaillées du modèle
 model_stats = model.count_parameters()
 
-    
 def warmup_then_constant(optimizer, warmup_steps):
     def lr_lambda(step):
         if step < warmup_steps:
             return step / warmup_steps
         return 1.0  # LR = learning_rate
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
 
 def human_readable(num):
     if num >= 1e9:
@@ -338,6 +305,7 @@ else:
     print(f"\n🆕 Starting fresh training")
 
 total_steps = num_epochs * len(train_loader)
+
 scheduler = warmup_then_constant(optimizer, warmup_steps=warmup)
 
 if scheduler_state_dict is not None:
@@ -386,12 +354,12 @@ for epoch in range(start_epoch, num_epochs):
         scaler.update()
         scheduler.step()
         global_step += 1 
-        
+
         ## without amp scaler
         # loss.backward() 
         # optimizer.step()
         # scheduler.step()
-        
+
         if i % 50 == 0:
             trackio.log(
                 {
@@ -446,17 +414,15 @@ for epoch in range(start_epoch, num_epochs):
             )
 
             # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
-            eval_prompt = random.choice(EVAL_PROMPTS)
-            _, gen_text, _, _ = generate_example(
+            _, gen_text, gen_text_raw, gen_tokens = generate_example(
                 model,
                 tokenizer,
                 block_size,
                 device,
                 DATASET_TEMPLATE,
-                eval_prompt,
-                max_new_tokens=60,
-                temperature=0.7  # Valeur stable
+                EVAL_PROMPT
             )
+            print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
             if not gen_text:
                 print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")
                 print(f"[DEBUG] gen_text_raw: {gen_text_raw}")
