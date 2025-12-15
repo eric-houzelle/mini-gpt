@@ -133,30 +133,43 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
     return total_loss / len(val_loader)
 
-def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float('inf')):
-    """Filtre les logits de probabilité pour Top-K et Top-P (Nucleus Sampling).
-    Les logits filtrés sont masqués par filter_value (-inf par défaut).
+def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("inf")):
     """
-    if top_k > 0:
-        # Seuls les top_k jetons restent
-        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
-        logits[indices_to_remove] = filter_value
+    logits: tenseur de forme (1, vocab_size)
+    Retourne un tenseur de même forme avec certains logits mis à -inf.
+    """
+    # On clone pour ne pas modifier in-place sans le vouloir
+    logits = logits.clone()
 
+    # On travaille en 1D (batch = 1)
+    assert logits.dim() == 2 and logits.size(0) == 1, "Cette implémentation suppose batch_size=1"
+    logits_1d = logits[0]  # shape: (vocab_size,)
+
+    # --- Top-K ---
+    if top_k > 0:
+        top_k = min(top_k, logits_1d.size(-1))  # sécurité
+        # seuil = plus petit logit parmi les top_k plus grands
+        kth_values = torch.topk(logits_1d, top_k)[0][-1]
+        indices_to_remove = logits_1d < kth_values
+        logits_1d[indices_to_remove] = filter_value
+
+    # --- Top-P (nucleus) ---
     if top_p < 1.0:
-        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        sorted_logits, sorted_indices = torch.sort(logits_1d, descending=True)
         cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
 
-        # Masquer les jetons au-delà de la masse de probabilité top_p
         sorted_indices_to_remove = cumulative_probs > top_p
-        # Déplacer l'indice d'un cran pour garder le dernier jeton inclus dans top_p
-        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-        sorted_indices_to_remove[..., 0] = 0
+        sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
+        sorted_indices_to_remove[0] = False
 
-        # Remplacer les logits masqués
+        # On récupère les ids de tokens à masquer
         indices_to_remove = sorted_indices[sorted_indices_to_remove]
-        logits[indices_to_remove] = filter_value
+        logits_1d[indices_to_remove] = filter_value
 
+    # On remet en (1, vocab_size)
+    logits[0] = logits_1d
     return logits
+
 
 def generate_example_v2(
     model,
