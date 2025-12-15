@@ -171,8 +171,8 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("Inf")
         logits[..., indices_to_remove] = filter_value
     return logits
 
-def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=60, min_new_tokens=20, temperature=0.7, top_k=50, top_p=0.9):
-    """Génère un exemple de texte pour les logs d'entraînement."""
+def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=60, temperature=0.7):
+    """Génération simple et stable (comme avant les modifications)."""
     model.eval()
 
     # Préparation du prompt
@@ -188,7 +188,7 @@ def generate_example(model, tokenizer, block_size, device, dataset_template, eva
     prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
     eos_id = tokenizer.eos_token_id
 
-    # Génération avec top-k/top-p
+    # Génération basique (sans top_k/top_p)
     with torch.no_grad():
         idx = prompt_ids
         for step in range(max_new_tokens):
@@ -200,38 +200,29 @@ def generate_example(model, tokenizer, block_size, device, dataset_template, eva
             logits = model(idx_cond).logits[:, -1, :]
             if temperature != 1.0:
                 logits = logits / temperature
-
-            # Applique top-k et top-p
-            logits = top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
             probs = torch.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
             # Évite EOS trop tôt
-            if eos_id is not None and step < min_new_tokens and next_token.item() == eos_id:
-                while next_token.item() == eos_id:
-                    next_token = torch.multinomial(probs, num_samples=1)
+            if eos_id is not None and step < 20 and next_token.item() == eos_id:
+                next_token = torch.multinomial(probs, num_samples=1)  # Rééchantillonne si EOS trop tôt
 
             idx = torch.cat((idx, next_token), dim=1)
-            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
+            if eos_id is not None and next_token.item() == eos_id:
                 break
 
     # Décodage
     prompt_len = prompt_ids.shape[-1]
     gen_tokens = idx[0, prompt_len:].tolist()
     gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
-    gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
 
-    # Métriques simples
-    unique_tokens = set(gen_tokens)
-    repetition_rate = 1 - len(unique_tokens)/len(gen_tokens) if gen_tokens else 0
-
-    # Affichage formaté pour les logs
     print(f"\n[Exemple de génération]")
     print(f"Prompt: {example_prompt}")
     print(f"Génération: {gen_text}")
-    print(f"  - Longueur: {len(gen_tokens)} tokens | Répétitions: {repetition_rate:.2f}")
+    print(f"  - Longueur: {len(gen_tokens)} tokens")
 
-    return example_prompt, gen_text, gen_text_raw, gen_tokens
+    return example_prompt, gen_text, gen_text, gen_tokens  # Simplifié
+
 
 train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
@@ -456,17 +447,15 @@ for epoch in range(start_epoch, num_epochs):
 
             # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
             eval_prompt = random.choice(EVAL_PROMPTS)
-            _, gen_text, gen_text_raw, gen_tokens = generate_example(
+            _, gen_text, _, _ = generate_example(
                 model,
                 tokenizer,
                 block_size,
                 device,
                 DATASET_TEMPLATE,
                 eval_prompt,
-                max_new_tokens=60,  # Limite à 60 tokens pour des logs concis
-                temperature=0.7,    # Température plus basse pour plus de cohérence
-                top_k=50,
-                top_p=0.9
+                max_new_tokens=60,
+                temperature=0.7  # Valeur stable
             )
             if not gen_text:
                 print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")
