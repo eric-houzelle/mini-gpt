@@ -26,7 +26,7 @@ DATASET_KEY = os.getenv("DATASET_KEY", "french-tinystories")
 DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
-EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il était une fois")
+EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il est principalement connu")
 EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "500"))
 
 num_epochs = config["training"]["num_epochs"]
