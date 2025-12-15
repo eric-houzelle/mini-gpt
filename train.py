@@ -4,7 +4,7 @@ import torch
 from datetime import datetime
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, top_k_top_p_filtering
 import string
 from datasets import load_dataset
 from torch.optim.lr_scheduler import OneCycleLR
@@ -14,6 +14,7 @@ from model.modeling_minigpt import MiniGPTForCausalLM
 from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
 import trackio
+import random
 import math
 load_dotenv()
 
@@ -26,7 +27,14 @@ DATASET_KEY = os.getenv("DATASET_KEY", "french-tinystories")
 DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
-EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il était une fois")
+EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il est principalement connu")
+EVAL_PROMPTS = [
+    "Il est principalement connu",
+    "La solution à ce problème est",
+    "Dans un laboratoire secret",
+    "Les Etats-Unis sont",
+    "Tout a changé quand",
+]
 EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "500"))
 
 num_epochs = config["training"]["num_epochs"]
@@ -132,48 +140,43 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
     return total_loss / len(val_loader)
 
-def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=400, min_new_tokens=20, temperature=0.8):
-    """Génère un exemple de texte pour suivi rapide pendant l'entraînement."""
+def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=60, min_new_tokens=20, temperature=0.7, top_k=50, top_p=0.9):
+    """Génère un exemple de texte pour les logs d'entraînement."""
     model.eval()
 
+    # Préparation du prompt
     if dataset_template:
         class _SafeDict(dict):
             def __missing__(self, key):
-                return eval_prompt  
-
-        formatter = string.Formatter()
-        field_names = {
-            field_name for _, field_name, _, _ in formatter.parse(dataset_template) if field_name
-        }
-        fmt = _SafeDict({name: eval_prompt for name in field_names})
+                return eval_prompt
+        fmt = _SafeDict({name: eval_prompt for name in string.Formatter().parse(dataset_template)[0][1:] if name})
         example_prompt = dataset_template.format_map(fmt)
-        prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
     else:
-        example_prompt = None
-        prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
+        example_prompt = eval_prompt
 
+    prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
     eos_id = tokenizer.eos_token_id
+
+    # Génération avec top-k/top-p
     with torch.no_grad():
         idx = prompt_ids
         for step in range(max_new_tokens):
             idx_cond = idx[:, -block_size:]
             if idx_cond.size(1) < block_size:
                 pad_len = block_size - idx_cond.size(1)
-                pad = torch.full(
-                    (idx_cond.size(0), pad_len),
-                    tokenizer.pad_token_id,
-                    device=idx_cond.device,
-                    dtype=idx_cond.dtype,
-                )
+                pad = torch.full((idx_cond.size(0), pad_len), tokenizer.pad_token_id, device=device, dtype=idx_cond.dtype)
                 idx_cond = torch.cat([pad, idx_cond], dim=1)
             logits = model(idx_cond).logits[:, -1, :]
             if temperature != 1.0:
                 logits = logits / temperature
+
+            # Applique top-k et top-p
+            logits = top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
             probs = torch.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
-            # Évite d'échantillonner EOS trop tôt
-            if eos_id is not None and step < min_new_tokens:
+            # Évite EOS trop tôt
+            if eos_id is not None and step < min_new_tokens and next_token.item() == eos_id:
                 while next_token.item() == eos_id:
                     next_token = torch.multinomial(probs, num_samples=1)
 
@@ -181,13 +184,21 @@ def generate_example(model, tokenizer, block_size, device, dataset_template, eva
             if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
                 break
 
-        sample = idx[0]
-
+    # Décodage
     prompt_len = prompt_ids.shape[-1]
-    gen_only = sample[prompt_len:]
-    gen_tokens = gen_only.tolist()
+    gen_tokens = idx[0, prompt_len:].tolist()
     gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
     gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
+
+    # Métriques simples
+    unique_tokens = set(gen_tokens)
+    repetition_rate = 1 - len(unique_tokens)/len(gen_tokens) if gen_tokens else 0
+
+    # Affichage formaté pour les logs
+    print(f"\n[Exemple de génération]")
+    print(f"Prompt: {example_prompt}")
+    print(f"Génération: {gen_text}")
+    print(f"  - Longueur: {len(gen_tokens)} tokens | Répétitions: {repetition_rate:.2f}")
 
     return example_prompt, gen_text, gen_text_raw, gen_tokens
 
@@ -413,15 +424,19 @@ for epoch in range(start_epoch, num_epochs):
             )
 
             # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
+            eval_prompt = random.choice(EVAL_PROMPTS)
             _, gen_text, gen_text_raw, gen_tokens = generate_example(
                 model,
                 tokenizer,
                 block_size,
                 device,
                 DATASET_TEMPLATE,
-                EVAL_PROMPT
+                eval_prompt,
+                max_new_tokens=60,  # Limite à 60 tokens pour des logs concis
+                temperature=0.7,    # Température plus basse pour plus de cohérence
+                top_k=50,
+                top_p=0.9
             )
-            print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
             if not gen_text:
                 print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")
                 print(f"[DEBUG] gen_text_raw: {gen_text_raw}")
