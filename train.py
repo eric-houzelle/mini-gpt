@@ -35,6 +35,7 @@ batch_size = config["training"]["batch_size"]
 learning_rate = config["training"]["learning_rate"]
 warmup = config["training"]["warmup"]
 override_lr = os.getenv("OVERRIDE_LR") or config["training"].get("override_lr")
+override_best_loss = os.getenv("OVERRIDE_BEST_LOSS") or config["training"].get("override_best_loss")
 
 embed_dim = config["model"]["embed_dim"]
 depth = config["model"]["depth"]
@@ -370,7 +371,10 @@ if os.path.exists(MODEL_SAVE_PATH):
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     start_epoch = checkpoint['epoch'] + 1
-    best_loss = checkpoint.get('val_loss', checkpoint.get('loss', float("inf")))  # Priorité à val_loss
+    if override_best_loss is not None:
+        best_loss = float(override_best_loss)
+    else:
+        best_loss = checkpoint.get('val_loss', checkpoint.get('loss', float("inf")))  # Priorité à val_loss
     scheduler_state_dict = checkpoint.get("scheduler_state_dict", None)
     global_step = checkpoint.get('global_step', start_epoch * len(train_loader))
     last_epoch = global_step - 1
