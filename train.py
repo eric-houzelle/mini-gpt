@@ -64,7 +64,7 @@ def load_tokenizer(tokenizer_name):
            "<|user|>",
            "<|assistant|>"
        ]
-   }
+    }
 
     tok.add_special_tokens(special_tokens)
 
