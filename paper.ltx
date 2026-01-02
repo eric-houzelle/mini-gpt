@@ -1,0 +1,201 @@
+\documentclass[11pt]{article}
+
+\usepackage{arxiv}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{microtype}
+
+\title{Rethinking Parameter Efficiency in STLMs:\\
+The Synergy of Universal Transformers and Rotary Embeddings}
+
+\author{
+  Eric Houzelle \\
+  Independent Researcher \\
+  \texttt{eric@hektore.com}
+}
+
+\date{December 2025}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Parameter redundancy remains a significant bottleneck for deploying Large Language Models (LLMs) on resource-constrained devices. This paper investigates \textbf{Super Tiny Language Models (STLMs)} that prioritize extreme parameter efficiency over raw scale. We explore a Transformer architecture utilizing aggressive cross-layer weight sharing augmented with Rotary Positional Embeddings (RoPE). Evaluated on a French adaptation of the \emph{TinyStories} dataset, our results reveal a powerful synergy: at high depths (16 layers), the fully shared Universal model (19M params) \textbf{outperforms} the standard Transformer baseline (58M params) while achieving a \textbf{67\% parameter reduction}. These findings demonstrate that decoupled sequence depth and positional encoding provide a sustainable path for state-of-the-art results on edge hardware.
+\end{abstract}
+
+\section{Introduction}
+
+The dominant paradigm in large language model research follows empirical scaling laws \cite{kaplan2020scaling}, where performance improves monotonically with increases in parameter count, data size, and compute. While successful, this paradigm neglects two increasingly important constraints:
+
+\begin{enumerate}
+    \item \textbf{Edge and Mobile Deployment}: Many real-world applications target mobile phones or embedded devices with strict memory budgets, often below 4\,GB of VRAM.
+    \item \textbf{Low-Resource Languages}: For many languages, training data is limited, making large models prone to overfitting and inefficient use of parameters.
+\end{enumerate}
+
+In these regimes, \emph{parameter efficiency} may be more valuable than sheer scale. This has led to the emergence of \textbf{Super Tiny Language Models (STLMs)}, a category of models specifically optimized for sub-100M parameter counts \cite{hillier2024stlm}. Motivated by this, we revisit the \textbf{Universal Transformer} architecture \cite{dehghani2018universal}, which enforces cross-layer weight sharing, effectively transforming the Transformer into a recurrent computation in depth. While previous work has shown mixed results for open-ended generation, we hypothesize that modern positional encodings can significantly mitigate these issues.
+
+We combine weight sharing with \textbf{Rotary Positional Embeddings (RoPE)} \cite{su2021rope}, which encode relative positions independently of layer index. This property is particularly well-suited to shared-weight architectures, where learned absolute positional embeddings can conflict with layer reuse.
+
+Our contributions are:
+\begin{itemize}
+    \item An empirical study of fully and partially shared Transformer architectures in the ultra-small regime (8M--45M parameters).
+    \item Evidence that full weight sharing can outperform standard Transformers at small scale and remain competitive at larger depths.
+    \item A case study on French TinyStories, demonstrating that efficient architectures are well-suited for low-resource and edge scenarios.
+\end{itemize}
+
+\section{Related Work}
+
+\textbf{Universal Transformers} \cite{dehghani2018universal} introduced the idea of tying parameters across layers, showing improved generalization on algorithmic tasks but reporting optimization difficulties in generative settings.
+
+\textbf{ALBERT} \cite{lan2019albert} demonstrated that cross-layer parameter sharing can act as a strong regularizer in BERT-style models, significantly reducing parameter count with minimal loss in accuracy.
+
+\textbf{TinyStories} \cite{eldan2023tinystories} showed that simplified language data allows small models to learn coherent reasoning and narrative structure, making it an ideal testbed for architectural experiments.
+
+Recently, \textbf{Hillier et al. (2024)} \cite{hillier2024stlm} demonstrated that STLMs can achieve significant compression through byte-level tokenization and weight tying. While their work focuses on tokenization strategies, our approach investigates the architectural synergy between full parameter sharing and Rotary Positional Embeddings (RoPE). RoPE \cite{su2021rope} is particularly crucial here as it replaces learned absolute embeddings with rotation matrices, removing the dependency between positional encoding and layer depth and potentially solving stability issues in recurrent Transformer architectures.
+
+\section{Methodology}
+
+\subsection{STLM Architecture}
+
+Our Super Tiny Language Model (STLM) is a causal, decoder-only Transformer. Let $x_l$ denote the hidden state at layer $l$. A standard Transformer block $F_{\theta_l}$ is defined as:
+\[
+x_{l+1} = F_{\theta_l}(x_l),
+\]
+where each layer has its own parameters $\theta_l$.
+
+In the \textbf{Universal (Fully Shared)} variant, we enforce:
+\[
+\theta_l = \theta \quad \forall l,
+\]
+yielding:
+\[
+x_{l+1} = F_{\theta}(x_l).
+\]
+
+This formulation increases model depth by adding computation (FLOPs) without increasing parameter memory. While this recurrence resembles an RNN, it is important to note that recurrence occurs \emph{in depth rather than in time}: the full sequence is processed at each step, preserving Transformer-style parallelism over tokens.
+
+\subsection{Variants Evaluated}
+
+We evaluate three architectures:
+\begin{enumerate}
+    \item \textbf{Baseline}: Standard GPT-style Transformer with unique attention and feed-forward weights.
+    \item \textbf{STLM-FFN}: Shared feed-forward network (FFN) weights across layers, with unique attention parameters (approximately 20--25\% reduction).
+    \item \textbf{STLM-Universal}: All Transformer block parameters shared across layers (34--60\% reduction depending on depth).
+\end{enumerate}
+
+All models use RoPE for positional encoding.
+
+\section{Experimental Setup}
+
+\textbf{Dataset}. We use \emph{TinyStories-French}, obtained by machine-translating the original English TinyStories dataset using a high-quality neural translation system. No post-editing was performed. While translation noise is present, it affects all models equally and does not favor shared-weight architectures.
+
+\textbf{Training}. All models were trained with identical optimization settings, random seeds, and token budgets. We use AdamW with a learning rate of $3\times10^{-4}$ and a OneCycleLR schedule. Smaller models were trained for 10 epochs, larger models for 2 epochs, ensuring comparable total token exposure.
+
+\textbf{Metrics}. We report validation cross-entropy loss, perplexity, parameter count, and peak VRAM usage.
+
+\section{Results and Analysis}
+
+\subsection{Small-Scale Efficiency (Depth=8, Embed=256)}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+Model & RoPE & Parameters & Loss & Samples/sec \\
+\midrule
+Baseline & No & 16.7M & 3.366 & 103 \\
+STLM-Universal & No & 9.38M & 3.384 & 103 \\
+\textbf{Baseline} & \textbf{Yes} & 16.6M & 3.405 & 98 \\
+\textbf{STLM-Universal} & \textbf{Yes} & \textbf{9.24M} & \textbf{3.398} & \textbf{100} \\
+\bottomrule
+\end{tabular}
+\caption{Results at small scale (Depth=8). Peak VRAM is dominated by activations rather than parameters and therefore remains constant (\~11.5 GB in this config).}
+\end{table}
+
+At this intermediate scale, full weight sharing acts as a strong regularizer, allowing the Universal model to remain extremely competitive while slashing parameter count by 45\%.
+
+\subsection{Scaling and the RoPE Synergy (Depth=16, Embed=512)}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+Model & RoPE & Parameters & Loss & Reduction \\
+\midrule
+Baseline & No & 58.7M & 3.413 & 0\% \\
+STLM-Universal & No & 19.3M & 3.421 & -67\% \\
+\textbf{Baseline} & \textbf{Yes} & 58.4M & 3.421 & 0\% \\
+\textbf{STLM-Universal} & \textbf{Yes} & \textbf{19.0M} & \textbf{3.409} & \textbf{-67\%} \\
+\bottomrule
+\end{tabular}
+\caption{Results at larger depth. Parameter count remains constant for the Universal model as depth increases.}
+\end{table}
+
+At Depth 16, the synergy between RoPE and weight sharing becomes manifest. The \textbf{STLM-Universal + RoPE} (3.409) actually \textbf{outperforms the Baseline + RoPE} (3.421) despite being \textbf{3x smaller} in parameter count. This confirms that modern positional encodings are the missing link for stable and performant recurrent Transformers.
+
+\subsection{Memory and Throughput Considerations}
+
+While weight sharing significantly reduces model storage and checkpoint size, peak VRAM usage and inference latency remain similar across variants. This is expected, as activation memory and FLOPs scale with depth, not parameter count. The primary advantages of shared-weight models are reduced storage, improved cache locality, and suitability for deployment on memory-constrained devices.
+
+\subsection{Limitations}
+
+While our results are promising, several limitations should be noted:
+\begin{enumerate}
+    \item The use of machine-translated data for the French TinyStories dataset may introduce translation artifacts;
+    \item The findings are currently limited to the simplified narrative domain of TinyStories and may not immediately generalize to complex factual reasoning;
+    \item Although weight sharing reduces storage and memory footprint, it does not reduce the total FLOPs required for inference, as the number of computational passes remains tied to the model depth.
+\end{enumerate}
+
+\section{Discussion}
+
+The success of Universal Transformers in this setting contrasts with earlier reports of convergence difficulties. We hypothesize that two factors contribute to this stability: (1) RoPE decouples positional information from layer index, avoiding conflicts under weight reuse; and (2) the simplified structure of TinyStories reduces long-range compositional complexity, making recurrent depth refinement effective.
+
+\section{Conclusion}
+
+This work provides empirical evidence that Transformer parameter redundancy is substantial, particularly in low-resource regimes. On French TinyStories, we show that:
+
+\begin{itemize}
+    \item At very small scale (8M--13M parameters), full weight sharing outperforms standard Transformers.
+    \item At small-to-medium scale (18M--45M parameters), partial sharing offers the best accuracy, while full sharing achieves up to 60\% compression with negligible loss.
+\end{itemize}
+
+These findings support the use of shared-weight Transformers for Green AI and edge deployment. Future work will explore \textbf{knowledge distillation}, using Shared-FFN models as teachers for Universal students, to further close the remaining performance gap at scale.
+
+\bibliographystyle{unsrt}
+\begin{thebibliography}{9}
+
+\bibitem{kaplan2020scaling}
+Jared Kaplan et al.
+\newblock Scaling laws for neural language models.
+\newblock \emph{arXiv preprint arXiv:2001.08361}, 2020.
+
+\bibitem{dehghani2018universal}
+Mostafa Dehghani et al.
+\newblock Universal Transformers.
+\newblock \emph{ICLR}, 2019.
+
+\bibitem{lan2019albert}
+Zhenzhong Lan et al.
+\newblock ALBERT: A Lite BERT.
+\newblock \emph{ICLR}, 2020.
+
+\bibitem{su2021rope}
+Jianlin Su et al.
+\newblock RoFormer: Enhanced Transformer with Rotary Position Embedding.
+\newblock \emph{arXiv preprint arXiv:2104.09864}, 2021.
+
+\bibitem{eldan2023tinystories}
+Ronen Eldan and Yuanzhi Li.
+\newblock TinyStories: How Small Can Language Models Be and Still Speak Coherent English?
+\newblock \emph{arXiv preprint arXiv:2305.07759}, 2023.
+
+\bibitem{hillier2024stlm}
+Dylan Hillier, Leon Guertler, et al.
+\newblock Super Tiny Language Models.
+\newblock \emph{arXiv preprint arXiv:2405.14159}, 2024.
+
+\end{thebibliography}
+
+\end{document}

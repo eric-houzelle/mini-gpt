@@ -13,6 +13,7 @@ from model.configuration import MiniGPTConfig
 from model.modeling_minigpt import MiniGPTForCausalLM
 from torch.nn.utils.rnn import pad_sequence
 from dotenv import load_dotenv
+import torch.nn.functional as F
 import trackio
 import math
 load_dotenv()
@@ -26,14 +27,16 @@ DATASET_KEY = os.getenv("DATASET_KEY", "french-tinystories")
 DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
-EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il était une fois")
+EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Prompt: En quelle année est sortie la chanson 'Baby' de Justin Bieber ? Answer: ")
 EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "500"))
-
+DATASET_FILTER_FIELD = os.getenv("DATASET_FILTER_FIELD")
+DATASET_FILTER_VALUE = os.getenv("DATASET_FILTER_VALUE")
 num_epochs = config["training"]["num_epochs"]
 batch_size = config["training"]["batch_size"]
 learning_rate = config["training"]["learning_rate"]
 warmup = config["training"]["warmup"]
 override_lr = os.getenv("OVERRIDE_LR") or config["training"].get("override_lr")
+override_best_loss = os.getenv("OVERRIDE_BEST_LOSS") or config["training"].get("override_best_loss")
 
 embed_dim = config["model"]["embed_dim"]
 depth = config["model"]["depth"]
@@ -48,15 +51,23 @@ use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", T
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
 
+
 def load_tokenizer(tokenizer_name):
     tok = AutoTokenizer.from_pretrained(tokenizer_name)
     if tok.pad_token is None:
         if tok.eos_token is not None:
             tok.pad_token = tok.eos_token
-        elif tok.sep_token is not None:
-            tok.pad_token = tok.sep_token
         else:
             tok.add_special_tokens({"pad_token": "[PAD]"})
+    special_tokens = {
+       "additional_special_tokens": [
+           "<|user|>",
+           "<|assistant|>"
+       ]
+   }
+
+    tok.add_special_tokens(special_tokens)
+
     return tok
 
 tokenizer = load_tokenizer(TOKENIZER_NAME)
@@ -70,7 +81,7 @@ if DATASET_NAME.endswith('.csv'):
         csv_path = DATASET_NAME
     elif os.path.exists(os.path.abspath(DATASET_NAME)):
         csv_path = os.path.abspath(DATASET_NAME)
-    
+
 if csv_path:
     print(f"📁 Loading local CSV file: {csv_path}")
     dataset = load_dataset("csv", data_files=csv_path)
@@ -79,6 +90,19 @@ if csv_path:
 else:
     dataset = load_dataset(DATASET_NAME)
     train_split_ds = dataset["train"]
+
+if DATASET_FILTER_FIELD and DATASET_FILTER_VALUE:
+    if DATASET_FILTER_FIELD not in train_split_ds.column_names:
+        print(f"⚠️ Warning: Filter field '{DATASET_FILTER_FIELD}' not found. Available columns: {train_split_ds.column_names}")
+    else:
+        # Support pour plusieurs termes séparés par des virgules (Logique OR)
+        filter_values = [v.strip().lower() for v in DATASET_FILTER_VALUE.split(",")]
+        print(f"🔍 Filtering dataset: rows where '{DATASET_FILTER_FIELD}' contains ANY of {filter_values}")
+        train_split_ds = train_split_ds.filter(
+            lambda x: any(val in str(x[DATASET_FILTER_FIELD]).lower() for val in filter_values)
+        )
+        print(f"✅ Filtered dataset: {len(train_split_ds)} rows remaining")
+
 
 if DATASET_TEMPLATE:
     class _SafeDict(dict):
@@ -110,11 +134,11 @@ def collate_fn(batch):
 
     max_len = block_size - 1 
     pad_id = tokenizer.pad_token_id
-    
+
     # Tronquer et pad pour garantir une longueur fixe (évite les formes dynamiques CUDAGraph)
     xs = [x[:max_len] if len(x) > max_len else x for x in xs]
     ys = [y[:max_len] if len(y) > max_len else y for y in ys]
-    
+
     xs = [torch.nn.functional.pad(x, (0, max_len - len(x)), value=pad_id) for x in xs]
     ys = [torch.nn.functional.pad(y, (0, max_len - len(y)), value=pad_id) for y in ys]
 
@@ -132,64 +156,130 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
     return total_loss / len(val_loader)
 
-def generate_example(model, tokenizer, block_size, device, dataset_template, eval_prompt, max_new_tokens=400, min_new_tokens=20, temperature=0.8):
-    """Génère un exemple de texte pour suivi rapide pendant l'entraînement."""
+def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("inf")):
+    """
+    logits: tenseur de forme (1, vocab_size)
+    Retourne un tenseur de même forme avec certains logits mis à -inf.
+    """
+    # On clone pour ne pas modifier in-place sans le vouloir
+    logits = logits.clone()
+
+    # On travaille en 1D (batch = 1)
+    assert logits.dim() == 2 and logits.size(0) == 1, "Cette implémentation suppose batch_size=1"
+    logits_1d = logits[0]  # shape: (vocab_size,)
+
+    # --- Top-K ---
+    if top_k > 0:
+        top_k = min(top_k, logits_1d.size(-1))  # sécurité
+        # seuil = plus petit logit parmi les top_k plus grands
+        kth_values = torch.topk(logits_1d, top_k)[0][-1]
+        indices_to_remove = logits_1d < kth_values
+        logits_1d[indices_to_remove] = filter_value
+
+    # --- Top-P (nucleus) ---
+    if top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(logits_1d, descending=True)
+        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+
+        sorted_indices_to_remove = cumulative_probs > top_p
+        sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
+        sorted_indices_to_remove[0] = False
+
+        # On récupère les ids de tokens à masquer
+        indices_to_remove = sorted_indices[sorted_indices_to_remove]
+        logits_1d[indices_to_remove] = filter_value
+
+    # On remet en (1, vocab_size)
+    logits[0] = logits_1d
+    return logits
+
+
+def generate_example_v2(
+    model,
+    tokenizer,
+    block_size,
+    device,
+    dataset_template,
+    eval_prompt,
+    max_new_tokens=400,
+    min_new_tokens=20,
+    temperature=0.8,
+    top_k=0,
+    top_p=0.9,
+):
     model.eval()
 
+    # Utiliser le modèle non compilé pour la génération
+    gen_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+
+    # --- Prompt ---
     if dataset_template:
         class _SafeDict(dict):
             def __missing__(self, key):
-                return eval_prompt  
+                return eval_prompt
 
         formatter = string.Formatter()
-        field_names = {
-            field_name for _, field_name, _, _ in formatter.parse(dataset_template) if field_name
-        }
-        fmt = _SafeDict({name: eval_prompt for name in field_names})
+        fields = {f for _, f, _, _ in formatter.parse(dataset_template) if f}
+        fmt = _SafeDict({f: eval_prompt for f in fields})
         example_prompt = dataset_template.format_map(fmt)
         prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
     else:
-        example_prompt = None
-        prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device)
+        example_prompt = eval_prompt
+        prompt_ids = tokenizer.encode(eval_prompt, return_tensors="pt").to(device)
 
     eos_id = tokenizer.eos_token_id
+    pad_id = tokenizer.pad_token_id
+    idx = prompt_ids
+
     with torch.no_grad():
-        idx = prompt_ids
-        for step in range(max_new_tokens):
-            idx_cond = idx[:, -block_size:]
-            if idx_cond.size(1) < block_size:
-                pad_len = block_size - idx_cond.size(1)
-                pad = torch.full(
-                    (idx_cond.size(0), pad_len),
-                    tokenizer.pad_token_id,
-                    device=idx_cond.device,
-                    dtype=idx_cond.dtype,
+        # 🔒 Désactiver AMP uniquement ici
+        with torch.cuda.amp.autocast(enabled=False):
+            for step in range(max_new_tokens):
+                idx_cond = idx[:, -block_size:]
+
+                logits = gen_model(idx_cond).logits[:, -1, :].float()
+
+                if temperature != 1.0:
+                    logits = logits / temperature
+
+                # Empêcher EOS trop tôt (AVANT softmax)
+                if eos_id is not None and step < min_new_tokens:
+                    logits[:, eos_id] = -float("inf")
+
+                logits = top_k_top_p_filtering(
+                    logits, top_k=top_k, top_p=top_p
                 )
-                idx_cond = torch.cat([pad, idx_cond], dim=1)
-            logits = model(idx_cond).logits[:, -1, :]
-            if temperature != 1.0:
-                logits = logits / temperature
-            probs = torch.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
 
-            # Évite d'échantillonner EOS trop tôt
-            if eos_id is not None and step < min_new_tokens:
-                while next_token.item() == eos_id:
-                    next_token = torch.multinomial(probs, num_samples=1)
+                probs = torch.softmax(logits, dim=-1)
 
-            idx = torch.cat((idx, next_token), dim=1)
-            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
-                break
+                # --- Sécurité numérique ---
+                if not torch.isfinite(probs).all():
+                    probs = torch.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
 
-        sample = idx[0]
+                probs_sum = probs.sum(dim=-1, keepdim=True)
 
-    prompt_len = prompt_ids.shape[-1]
-    gen_only = sample[prompt_len:]
-    gen_tokens = gen_only.tolist()
+                if (probs_sum <= 0).any():
+                    # fallback neutre (ultra rare)
+                    next_token = torch.argmax(logits, dim=-1, keepdim=True)
+                else:
+                    probs = probs / probs_sum
+                    next_token = torch.multinomial(probs, 1)
+
+                idx = torch.cat([idx, next_token], dim=1)
+
+                if eos_id is not None and step >= min_new_tokens:
+                    if next_token.item() == eos_id:
+                        break
+
+    sample = idx[0]
+    gen_tokens = sample[prompt_ids.shape[-1]:].tolist()
+
     gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
     gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
 
     return example_prompt, gen_text, gen_text_raw, gen_tokens
+
+
 
 train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
@@ -212,21 +302,18 @@ model_config = MiniGPTConfig(
 )
 
 model = MiniGPTForCausalLM(model_config).to(device)
-
+#model.resize_token_embeddings(len(tokenizer))
 total_params = sum(p.numel() for p in model.parameters())
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 # Afficher les stats détaillées du modèle
 model_stats = model.count_parameters()
 
-def cosine_with_warmup(optimizer, warmup_steps, total_steps, min_lr_ratio=0.1):
+def warmup_then_constant(optimizer, warmup_steps):
     def lr_lambda(step):
         if step < warmup_steps:
             return step / warmup_steps
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        cosine = 0.5 * (1 + math.cos(math.pi * progress))
-        return max(min_lr_ratio, cosine)
-    
+        return 1.0  # LR = learning_rate
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
@@ -293,7 +380,10 @@ if os.path.exists(MODEL_SAVE_PATH):
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     start_epoch = checkpoint['epoch'] + 1
-    best_loss = checkpoint.get('val_loss', checkpoint.get('loss', float("inf")))  # Priorité à val_loss
+    if override_best_loss is not None:
+        best_loss = float(override_best_loss)
+    else:
+        best_loss = checkpoint.get('val_loss', checkpoint.get('loss', float("inf")))  # Priorité à val_loss
     scheduler_state_dict = checkpoint.get("scheduler_state_dict", None)
     global_step = checkpoint.get('global_step', start_epoch * len(train_loader))
     last_epoch = global_step - 1
@@ -308,12 +398,8 @@ else:
     print(f"\n🆕 Starting fresh training")
 
 total_steps = num_epochs * len(train_loader)
-scheduler = cosine_with_warmup(
-    optimizer,
-    warmup_steps=warmup,
-    total_steps=total_steps,
-    min_lr_ratio=0.1
-)
+
+scheduler = warmup_then_constant(optimizer, warmup_steps=warmup)
 
 if scheduler_state_dict is not None:
     scheduler.load_state_dict(scheduler_state_dict)
@@ -361,12 +447,12 @@ for epoch in range(start_epoch, num_epochs):
         scaler.update()
         scheduler.step()
         global_step += 1 
-        
+
         ## without amp scaler
         # loss.backward() 
         # optimizer.step()
         # scheduler.step()
-        
+
         if i % 50 == 0:
             trackio.log(
                 {
@@ -419,20 +505,22 @@ for epoch in range(start_epoch, num_epochs):
                 },
                 step=global_step,
             )
-
-            # Exemple de génération aligné avec le dataset si DATASET_TEMPLATE est défini
-            _, gen_text, gen_text_raw, gen_tokens = generate_example(
+                
+            _, gen_text, gen_text_raw, gen_tokens = generate_example_v2(
                 model,
                 tokenizer,
                 block_size,
                 device,
                 DATASET_TEMPLATE,
-                EVAL_PROMPT
+                EVAL_PROMPT,
+                temperature=0.7, # Température légèrement réduite
+                top_k=0,
+                top_p=0.9
             )
-            print(f"[{now()}] Exemple génération (suite de l'invite):\n{gen_text}")
+            print(f"[{now()}] Exemple génération v2 (suite de l'invite):\n{gen_text}")
             if not gen_text:
-                print(f"[DEBUG] gen_tokens (len={len(gen_tokens)}): {gen_tokens}")
-                print(f"[DEBUG] gen_text_raw: {gen_text_raw}")
+                print(f"[DEBUG] gen_tokens v2 (len={len(gen_tokens)}): {gen_tokens}")
+                print(f"[DEBUG] gen_text_raw v2: {gen_text_raw}")
 
             model.train()
 trackio.finish()

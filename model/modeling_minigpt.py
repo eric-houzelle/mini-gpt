@@ -9,14 +9,14 @@ MiniGPTForCausalLM hérite de MiniGPTModel et ajoute uniquement la tête de lang
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from .configuration import MiniGPTConfig
 from .modeling_minigpt_core import MiniGPTModel
 
 
 
-class MiniGPTForCausalLM(PreTrainedModel):
+class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
     """
     MiniGPT model avec une tête de langage pour la génération de texte.
     
