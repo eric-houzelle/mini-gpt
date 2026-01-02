@@ -22,6 +22,7 @@ class MiniGPTConfig(PretrainedConfig):
         weight_sharing="none",
         use_rope=True,
         use_gradient_checkpointing=False,
+        num_experts=1,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -35,4 +36,5 @@ class MiniGPTConfig(PretrainedConfig):
         self.weight_sharing = weight_sharing
         self.use_rope = use_rope
         self.use_gradient_checkpointing = use_gradient_checkpointing
+        self.num_experts = num_experts
 

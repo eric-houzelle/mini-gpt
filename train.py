@@ -47,9 +47,17 @@ hidden_dim = config["model"]["hidden_dim"]
 weight_sharing = config["model"].get("weight_sharing", "none")  # STLM: weight sharing entre blocs
 use_rope = config["model"].get("use_rope", True)  # STLM: RoPE embeddings
 use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", True)
-
+num_experts = config["model"].get("num_experts", 1)
+training_mode = config["training"].get("mode", "backbone")
+training_expert_id = config["training"].get("expert_id", None)
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
+
+if training_mode == "expert":
+    if training_expert_id is None:
+        raise ValueError("training.mode='expert' nécessite training.expert_id")
+    if not (0 <= training_expert_id < num_experts):
+        raise ValueError(f"expert_id invalide: {training_expert_id}")
 
 
 def load_tokenizer(tokenizer_name):
@@ -194,6 +202,44 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("inf")
     return logits
 
 
+def freeze_all(model):
+    for p in model.parameters():
+        p.requires_grad = False
+
+def unfreeze_expert(model, expert_id: int):
+    for name, p in model.named_parameters():
+        if f"experts.{expert_id}." in name:
+            p.requires_grad = True
+
+def unfreeze_backbone(model):
+    # si tu veux entraîner le backbone (attention + embeddings + norms)
+    for name, p in model.named_parameters():
+        if "experts." not in name:
+            p.requires_grad = True
+
+def configure_training_mode(model, mode: str, expert_id: int | None):
+    """
+    Configure automatiquement :
+    - expert actif
+    - paramètres entraînables
+    """
+
+    freeze_all(model)
+
+    if mode == "backbone":
+        print("🧠 Training mode: BACKBONE (expert 0)")
+        model.set_active_expert(0)
+        unfreeze_backbone(model)
+
+    elif mode == "expert":
+        print(f"🧠 Training mode: EXPERT {expert_id}")
+        model.set_active_expert(expert_id)
+        unfreeze_expert(model, expert_id)
+
+    else:
+        raise ValueError(f"Unknown training mode: {mode}")
+
+
 def generate_example_v2(
     model,
     tokenizer,
@@ -298,7 +344,8 @@ model_config = MiniGPTConfig(
     hidden_dim=hidden_dim,
     weight_sharing=weight_sharing,  # STLM: "none", "ffn" ou "full"
     use_rope=use_rope,  # STLM: RoPE au lieu de learned pos embeddings
-    use_gradient_checkpointing=use_gradient_checkpointing
+    use_gradient_checkpointing=use_gradient_checkpointing,
+    num_experts=num_experts,
 )
 
 model = MiniGPTForCausalLM(model_config).to(device)
@@ -348,6 +395,33 @@ print(f"   - Transformer blocks: {human_readable(model_stats['blocks'])}")
 print(f"{'='*70}\n")
 
 
+
+
+if os.path.exists(MODEL_SAVE_PATH):
+    checkpoint = torch.load(MODEL_SAVE_PATH, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
+    start_epoch = checkpoint['epoch'] + 1
+    best_loss = checkpoint.get('val_loss', float("inf"))
+    global_step = checkpoint.get('global_step', start_epoch * len(train_loader))
+    scheduler_state_dict = checkpoint.get('scheduler_state_dict', None)
+
+    print(f"\n✅ Checkpoint loaded from epoch {checkpoint['epoch']}")
+else:
+    start_epoch = 0
+    best_loss = float("inf")
+    global_step = 0
+    scheduler_state_dict = None
+    print(f"\n🆕 Starting fresh training")
+
+# --- Configurer backbone / expert ---
+configure_training_mode(
+    model,
+    training_mode,
+    training_expert_id
+)
+
+# --- Construire l’optimizer (APRÈS freeze/unfreeze) ---
 decay_params = []
 no_decay_params = []
 
@@ -355,9 +429,9 @@ for name, param in model.named_parameters():
     if not param.requires_grad:
         continue
     if param.ndim >= 2:
-        decay_params.append(param)   # weight matrices
+        decay_params.append(param)
     else:
-        no_decay_params.append(param)  # bias, embeddings, RMSNorm weights
+        no_decay_params.append(param)
 
 optimizer = torch.optim.AdamW(
     [
@@ -369,36 +443,7 @@ optimizer = torch.optim.AdamW(
     eps=1e-8
 )
 
-loss_fn = nn.CrossEntropyLoss(
-    ignore_index=tokenizer.pad_token_id,
-    label_smoothing=0.05
-)
-
-
-if os.path.exists(MODEL_SAVE_PATH):
-    checkpoint = torch.load(MODEL_SAVE_PATH, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    start_epoch = checkpoint['epoch'] + 1
-    if override_best_loss is not None:
-        best_loss = float(override_best_loss)
-    else:
-        best_loss = checkpoint.get('val_loss', checkpoint.get('loss', float("inf")))  # Priorité à val_loss
-    scheduler_state_dict = checkpoint.get("scheduler_state_dict", None)
-    global_step = checkpoint.get('global_step', start_epoch * len(train_loader))
-    last_epoch = global_step - 1
-    print(f"\n✅ Checkpoint loaded from epoch {checkpoint['epoch']}")
-    print(f"   Best validation loss so far: {best_loss:.4f}")
-else:
-    start_epoch = 0
-    best_loss = float("inf")
-    global_step = 0
-    last_epoch = -1
-    scheduler_state_dict = None
-    print(f"\n🆕 Starting fresh training")
-
-total_steps = num_epochs * len(train_loader)
-
+loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 scheduler = warmup_then_constant(optimizer, warmup_steps=warmup)
 
 if scheduler_state_dict is not None:

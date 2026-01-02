@@ -6,6 +6,31 @@ from transformers import PreTrainedModel
 from .configuration import MiniGPTConfig
 
 
+
+class SwiGLU(nn.Module):
+    """SwiGLU activation function as described in the Super Tiny LM paper.
+    SwiGLU(x) = (Swish(xW) ⊗ xV)W2
+    where Swish(x) = SiLU(x) in PyTorch
+    """
+    def __init__(self, embed_dim, hidden_dim):
+        super().__init__()
+        self.w = nn.Linear(embed_dim, hidden_dim, bias=False)
+        self.v = nn.Linear(embed_dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, embed_dim, bias=False)
+    
+    def forward(self, x):
+        return self.w2(F.silu(self.w(x)) * self.v(x))
+
+
+class FFNExpert(nn.Module):
+    def __init__(self, embed_dim, hidden_dim):
+        super().__init__()
+        self.ff = SwiGLU(embed_dim, hidden_dim)
+
+    def forward(self, x):
+        return self.ff(x)
+
+
 class RoPEEmbedding(nn.Module):
     """Rotary Position Embedding (RoPE) comme utilisé dans LLaMA et autres LLMs modernes.
     
@@ -62,19 +87,6 @@ class RoPEEmbedding(nn.Module):
         return q_rot, k_rot
 
 
-class SwiGLU(nn.Module):
-    """SwiGLU activation function as described in the Super Tiny LM paper.
-    SwiGLU(x) = (Swish(xW) ⊗ xV)W2
-    where Swish(x) = SiLU(x) in PyTorch
-    """
-    def __init__(self, embed_dim, hidden_dim):
-        super().__init__()
-        self.w = nn.Linear(embed_dim, hidden_dim, bias=False)
-        self.v = nn.Linear(embed_dim, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, embed_dim, bias=False)
-    
-    def forward(self, x):
-        return self.w2(F.silu(self.w(x)) * self.v(x))
 
 
 class SelfAttention(nn.Module):
@@ -116,21 +128,30 @@ class SelfAttention(nn.Module):
         return self.resid_dropout(self.out(attn))
 
 class TransformerBlock(nn.Module):
-    def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim = 512, layerdrop=0.1, shared_ff=None, max_seq_len=2048, use_rope=True):
+    def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim = 512, layerdrop=0.1, shared_experts=None, max_seq_len=2048, use_rope=True, num_experts=1):
         super().__init__()
         self.attn = SelfAttention(embed_dim, heads, dropout, max_seq_len=max_seq_len, use_rope=use_rope)
         self.ln1 = nn.LayerNorm(embed_dim)
-        # Utiliser un FFN partagé si fourni, sinon créer un nouveau
-        self.ff = shared_ff if shared_ff is not None else SwiGLU(embed_dim, hidden_dim)
+        self.experts = shared_experts
+        if self.experts is None:
+            self.experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(num_experts)])
+
+        self.active_expert = 0
+        
         self.ln2 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
         self.layerdrop = layerdrop
+
+    def set_active_expert(self, expert_id: int):
+        self.active_expert = expert_id
 
     def forward(self, x, mask=None):
         if self.training and torch.rand(1).item() < self.layerdrop:
             return x
         x = x + self.dropout(self.attn(self.ln1(x), mask))
-        x = x + self.dropout(self.ff(self.ln2(x)))
+
+        x = x + self.dropout(self.experts[self.active_expert](self.ln2(x)))
+
         return x
     
     def forward_checkpointed(self, x, mask=None):
@@ -166,6 +187,7 @@ class MiniGPT(PreTrainedModel):
         weight_sharing = config.weight_sharing
         use_rope = config.use_rope
         use_gradient_checkpointing = config.use_gradient_checkpointing
+        num_experts = config.num_experts
         self.token_emb = nn.Embedding(vocab_size, embed_dim)
         self.use_rope = use_rope
         self.use_gradient_checkpointing = use_gradient_checkpointing
@@ -183,27 +205,29 @@ class MiniGPT(PreTrainedModel):
         self.embed_dim = embed_dim
         self.heads = heads
         self.hidden_dim = hidden_dim
+        self.num_experts = config.num_experts
+        self.active_expert = 0
         
         # Créer les blocs selon le type de weight sharing
         if weight_sharing == "none":
             # Comportement original : chaque bloc a ses propres poids
             self.blocks = nn.ModuleList([
                 TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1, 
-                               max_seq_len=block_size, use_rope=use_rope) 
+                               max_seq_len=block_size, use_rope=use_rope, num_experts=num_experts) 
                 for _ in range(depth)
             ])
         elif weight_sharing == "ffn":
-            # Partage uniquement les FFN, attention séparée
-            shared_ff = SwiGLU(embed_dim, hidden_dim)
+            # Partage uniquement les FFN (experts), attention séparée
+            shared_experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(num_experts)])
             self.blocks = nn.ModuleList([
                 TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1, 
-                               shared_ff=shared_ff, max_seq_len=block_size, use_rope=use_rope)
+                               shared_experts=shared_experts, max_seq_len=block_size, use_rope=use_rope, num_experts=num_experts)
                 for _ in range(depth)
             ])
         elif weight_sharing == "full":
             # ALBERT-style : un seul bloc réutilisé depth fois
             self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1,
-                                                max_seq_len=block_size, use_rope=use_rope)
+                                                max_seq_len=block_size, use_rope=use_rope, num_experts=num_experts)
             self.blocks = None  # On n'utilise pas de ModuleList dans ce cas
         else:
             raise ValueError(f"weight_sharing doit être 'none', 'ffn' ou 'full', pas '{weight_sharing}'")
@@ -213,6 +237,14 @@ class MiniGPT(PreTrainedModel):
         self.head.weight = self.token_emb.weight #On réutilise les poids de la matrice token_emb pour les tetes 
         self.block_size = block_size
         self.apply(self._init_weights)
+
+    def set_active_expert(self, expert_id: int):
+        self.active_expert = expert_id
+        if self.weight_sharing == "full":
+            self.shared_block.set_active_expert(expert_id)
+        else:
+            for block in self.blocks:
+                block.set_active_expert(expert_id)
 
     def forward(self, idx):
         B, T = idx.shape

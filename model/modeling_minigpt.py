@@ -66,6 +66,10 @@ class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
         # Mettre à jour le weight tying
         self.lm_head.weight = self.model.token_emb.weight
 
+    def set_active_expert(self, expert_id: int):
+        self.model.set_active_expert(expert_id)
+
+
     def forward(
         self,
         input_ids=None,

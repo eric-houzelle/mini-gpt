@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from .model import RoPEEmbedding, SwiGLU, SelfAttention, TransformerBlock
+from .model import RoPEEmbedding, SwiGLU, FFNExpert, SelfAttention, TransformerBlock
 
 from .configuration import MiniGPTConfig
 
@@ -32,6 +32,8 @@ class MiniGPTModel(nn.Module):
         self.block_size = block_size
         self.depth = depth
         self.weight_sharing = config.weight_sharing
+        self.num_experts = config.num_experts
+        self.active_expert = 0
 
         # Positional embeddings only if not using RoPE
         if not config.use_rope:
@@ -43,22 +45,22 @@ class MiniGPTModel(nn.Module):
         if self.weight_sharing == "none":
             self.blocks = nn.ModuleList([
                 TransformerBlock(embed_dim, heads, dropout, hidden_dim,
-                                 max_seq_len=block_size, use_rope=config.use_rope)
+                                 max_seq_len=block_size, use_rope=config.use_rope, num_experts=config.num_experts)
                 for _ in range(depth)
             ])
 
         elif self.weight_sharing == "ffn":
-            shared_ff = SwiGLU(embed_dim, hidden_dim)
+            shared_experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(num_experts)])
             self.blocks = nn.ModuleList([
                 TransformerBlock(embed_dim, heads, dropout, hidden_dim,
-                                 shared_ff=shared_ff, max_seq_len=block_size,
-                                 use_rope=config.use_rope)
+                                 shared_experts=shared_experts, max_seq_len=block_size,
+                                 use_rope=config.use_rope, num_experts=config.num_experts)
                 for _ in range(depth)
             ])
 
         elif self.weight_sharing == "full":
             self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim,
-                                                 max_seq_len=block_size, use_rope=config.use_rope)
+                                                 max_seq_len=block_size, use_rope=config.use_rope, num_experts=config.num_experts)
             self.blocks = None
 
         self.ln_f = nn.LayerNorm(embed_dim)
@@ -71,6 +73,11 @@ class MiniGPTModel(nn.Module):
         
     def get_output_embeddings(self):
         return None
+
+    def set_active_expert(self, expert_id: int):
+        self.active_expert = expert_id
+        for block in self.blocks:
+            block.set_active_expert(expert_id)
 
     def forward(
         self,

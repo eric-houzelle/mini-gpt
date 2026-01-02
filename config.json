@@ -1,23 +1,27 @@
 {
   "training": {
-    "num_epochs": 200,
+    "num_epochs": 300,
     "batch_size": 32,
-    "learning_rate": 1e-4,
-    "warmup": 100
+    "learning_rate": 5e-4,
+    "warmup": 3000,
+    "override_lr": 2e-5,
+    "override_best_loss": null,
+    "mode": "backbone",
+    "expert_id": null
   },
   "model": {
-    "embed_dim": 512,
-    "depth": 10,
-    "heads": 8,
+    "embed_dim": 640,
+    "depth": 20,
+    "heads": 10,
     "block_size": 256,
-    "dropout": 0.15,
-    "hidden_dim": 2048,
-    "weight_sharing": "none",
+    "dropout": 0.05,
+    "hidden_dim": 2560,
+    "weight_sharing": "ffn",
     "use_rope": true,
     "use_gradient_checkpointing": true
   },
   "data": {
-    "max_texts": 30000,
-    "train_split_ratio": 0.95
+    "max_texts": 500000,
+    "train_split_ratio": 0.90
   }
 }
