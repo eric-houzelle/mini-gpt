@@ -19,6 +19,7 @@ import math
 load_dotenv()
 
 # --- Optimisations pour GPU récents (L4, A100, etc.) ---
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 torch.set_float32_matmul_precision('high')
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -337,7 +338,8 @@ def generate_example_v2(
 
 
 train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+# Réduire le batch de validation pour éviter l'OOM avec CUDA Graphs
+val_loader   = DataLoader(val_ds, batch_size=min(32, batch_size), shuffle=False, collate_fn=collate_fn)
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -523,6 +525,8 @@ for epoch in range(start_epoch, num_epochs):
 
         # Validation et génération périodiques
         if global_step % EVAL_EVERY_STEPS == 0:
+            # Vider le cache avant validation pour laisser de la place aux CUDA Graphs
+            torch.cuda.empty_cache()
             val_loss = compute_validation_loss(model, val_loader, loss_fn, device)
             improvement = best_loss - val_loss
             if best_loss != float("inf"):
