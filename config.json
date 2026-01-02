@@ -1,9 +1,9 @@
 {
   "training": {
     "num_epochs": 300,
-    "batch_size": 32,
-    "learning_rate": 5e-4,
-    "warmup": 3000,
+    "batch_size": 64,
+    "learning_rate": 8e-4,
+    "warmup": 2000,
     "override_lr": 2e-5,
     "override_best_loss": null,
     "mode": "backbone",
@@ -11,14 +11,14 @@
   },
   "model": {
     "embed_dim": 640,
-    "depth": 20,
+    "depth": 14,
     "heads": 10,
     "block_size": 256,
     "dropout": 0.05,
-    "hidden_dim": 2560,
-    "weight_sharing": "ffn",
+    "hidden_dim": 3840,
+    "weight_sharing": "none",
     "use_rope": true,
-    "use_gradient_checkpointing": true
+    "use_gradient_checkpointing": false
   },
   "data": {
     "max_texts": 500000,

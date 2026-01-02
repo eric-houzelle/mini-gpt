@@ -18,6 +18,12 @@ import trackio
 import math
 load_dotenv()
 
+# --- Optimisations pour GPU récents (L4, A100, etc.) ---
+torch.set_float32_matmul_precision('high')
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+# ------------------------------------------------------
+
 CONFIG_PATH = "config.json"
 with open(CONFIG_PATH, "r") as f:
     config = json.load(f)
@@ -157,11 +163,13 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
     model.eval()
     total_loss = 0.0
     with torch.no_grad():
-        for xb_val, yb_val in val_loader:
-            xb_val, yb_val = xb_val.to(device), yb_val.to(device)
-            logits = model(xb_val).logits
-            B, T, C = logits.shape
-            total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
+        # Utilisation de autocast pour correspondre à l'entraînement et réduire la VRAM
+        with torch.amp.autocast("cuda"):
+            for xb_val, yb_val in val_loader:
+                xb_val, yb_val = xb_val.to(device), yb_val.to(device)
+                logits = model(xb_val).logits
+                B, T, C = logits.shape
+                total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
     return total_loss / len(val_loader)
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("inf")):
@@ -213,8 +221,9 @@ def unfreeze_expert(model, expert_id: int):
 
 def unfreeze_backbone(model):
     # si tu veux entraîner le backbone (attention + embeddings + norms)
+    # ainsi que l'expert 0 (tronc commun)
     for name, p in model.named_parameters():
-        if "experts." not in name:
+        if "experts." not in name or "experts.0." in name:
             p.requires_grad = True
 
 def configure_training_mode(model, mode: str, expert_id: int | None):

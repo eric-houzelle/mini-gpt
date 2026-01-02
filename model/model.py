@@ -146,13 +146,21 @@ class TransformerBlock(nn.Module):
         self.active_expert = expert_id
 
     def forward(self, x, mask=None):
-        if self.training and torch.rand(1).item() < self.layerdrop:
+        if not self.training or self.layerdrop == 0:
+            x = x + self.dropout(self.attn(self.ln1(x), mask))
+            x = x + self.dropout(self.experts[self.active_expert](self.ln2(x)))
             return x
-        x = x + self.dropout(self.attn(self.ln1(x), mask))
 
-        x = x + self.dropout(self.experts[self.active_expert](self.ln2(x)))
+        # Version compatible CUDA Graphs : pas de branchement CPU (.item())
+        # On génère un masque binaire 0 ou 1 sur le GPU
+        keep_prob = 1.0 - self.layerdrop
+        drop_mask = (torch.rand(1, device=x.device) < keep_prob).float()
 
-        return x
+        res = self.dropout(self.attn(self.ln1(x), mask))
+        res = res + self.dropout(self.experts[self.active_expert](self.ln2(x)))
+        
+        # On multiplie la branche résiduelle par le masque
+        return x + res * drop_mask
     
     def forward_checkpointed(self, x, mask=None):
         """Version avec gradient checkpointing pour économiser VRAM."""
