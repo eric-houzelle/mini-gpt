@@ -220,7 +220,7 @@ class MiniGPT(PreTrainedModel):
         if weight_sharing == "none":
             # Comportement original : chaque bloc a ses propres poids
             self.blocks = nn.ModuleList([
-                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1, 
+                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0, 
                                max_seq_len=block_size, use_rope=use_rope, num_experts=num_experts) 
                 for _ in range(depth)
             ])
@@ -228,13 +228,13 @@ class MiniGPT(PreTrainedModel):
             # Partage uniquement les FFN (experts), attention séparée
             shared_experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(num_experts)])
             self.blocks = nn.ModuleList([
-                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1, 
+                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0, 
                                shared_experts=shared_experts, max_seq_len=block_size, use_rope=use_rope, num_experts=num_experts)
                 for _ in range(depth)
             ])
         elif weight_sharing == "full":
             # ALBERT-style : un seul bloc réutilisé depth fois
-            self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1,
+            self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0,
                                                 max_seq_len=block_size, use_rope=use_rope, num_experts=num_experts)
             self.blocks = None  # On n'utilise pas de ModuleList dans ce cas
         else:
@@ -242,9 +242,9 @@ class MiniGPT(PreTrainedModel):
         
         self.ln_f = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, vocab_size, bias=False) # on enleve bias pour que head et token_emb est la meme taille
+        self.apply(self._init_weights)
         self.head.weight = self.token_emb.weight #On réutilise les poids de la matrice token_emb pour les tetes 
         self.block_size = block_size
-        self.apply(self._init_weights)
 
     def set_active_expert(self, expert_id: int):
         self.active_expert = expert_id
