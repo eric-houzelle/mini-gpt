@@ -147,17 +147,25 @@ def now():
 def collate_fn(batch):
     xs, ys = zip(*batch)
 
-    max_len = block_size - 1 
+    max_len = block_size - 1
     pad_id = tokenizer.pad_token_id
+    IGNORE_INDEX = -100  # standard PyTorch
 
-    # Tronquer et pad pour garantir une longueur fixe (évite les formes dynamiques CUDAGraph)
     xs = [x[:max_len] if len(x) > max_len else x for x in xs]
     ys = [y[:max_len] if len(y) > max_len else y for y in ys]
 
-    xs = [torch.nn.functional.pad(x, (0, max_len - len(x)), value=pad_id) for x in xs]
-    ys = [torch.nn.functional.pad(y, (0, max_len - len(y)), value=pad_id) for y in ys]
+    xs = [
+        torch.nn.functional.pad(x, (0, max_len - len(x)), value=pad_id)
+        for x in xs
+    ]
+
+    ys = [
+        torch.nn.functional.pad(y, (0, max_len - len(y)), value=IGNORE_INDEX)
+        for y in ys
+    ]
 
     return torch.stack(xs), torch.stack(ys)
+
 
 def compute_validation_loss(model, val_loader, loss_fn, device):
     """Calcule la loss de validation moyenne sur l'ensemble du loader."""
@@ -454,7 +462,8 @@ optimizer = torch.optim.AdamW(
     eps=1e-8
 )
 
-loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
+
 scheduler = warmup_then_constant(optimizer, warmup_steps=warmup)
 
 if scheduler_state_dict is not None:
