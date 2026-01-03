@@ -152,9 +152,9 @@ class TransformerBlock(nn.Module):
             return x
 
         # Version compatible CUDA Graphs : pas de branchement CPU (.item())
-        # On génère un masque binaire 0 ou 1 sur le GPU
+        # On génère un masque binaire 0 ou 1 sur le GPU par échantillon (B, 1, 1)
         keep_prob = 1.0 - self.layerdrop
-        drop_mask = (torch.rand(1, device=x.device) < keep_prob).float()
+        drop_mask = (torch.rand(x.shape[0], 1, 1, device=x.device) < keep_prob).float()
 
         res = self.dropout(self.attn(self.ln1(x), mask))
         res = res + self.dropout(self.experts[self.active_expert](self.ln2(x)))
