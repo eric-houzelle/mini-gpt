@@ -133,10 +133,17 @@ class TransformerBlock(nn.Module):
         self.attn = SelfAttention(embed_dim, heads, dropout, max_seq_len=max_seq_len, use_rope=use_rope)
         self.ln1 = nn.LayerNorm(embed_dim)
         self.experts = shared_experts
+        
         if self.experts is None:
-            self.experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(num_experts)])
+            self.ff_backbone = FFNExpert(embed_dim, hidden_dim)
+            self.experts = nn.ModuleList([
+                FFNExpert(embed_dim, hidden_dim)
+                for _ in range(num_experts)
+            ])
 
-        self.active_expert = 0
+            self.expert_scale = 0.1
+
+        self.active_expert = None
         
         self.ln2 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
@@ -148,7 +155,13 @@ class TransformerBlock(nn.Module):
     def forward(self, x, mask=None):
         if not self.training or self.layerdrop == 0:
             x = x + self.dropout(self.attn(self.ln1(x), mask))
-            x = x + self.dropout(self.experts[self.active_expert](self.ln2(x)))
+            x = x + self.dropout(self.ff_backbone(self.ln2(x)))
+
+            # Expert additif (optionnel)
+            if self.active_expert is not None:
+                x = x + self.expert_scale * self.dropout(
+                    self.experts[self.active_expert](self.ln2(x))
+                )
             return x
 
         # Version compatible CUDA Graphs : pas de branchement CPU (.item())
@@ -157,9 +170,13 @@ class TransformerBlock(nn.Module):
         drop_mask = (torch.rand(x.shape[0], 1, 1, device=x.device) < keep_prob).float()
 
         res = self.dropout(self.attn(self.ln1(x), mask))
-        res = res + self.dropout(self.experts[self.active_expert](self.ln2(x)))
-        
-        # On multiplie la branche résiduelle par le masque
+        res = res + self.dropout(self.ff_backbone(self.ln2(x)))
+
+        if self.active_expert is not None:
+            res = res + self.expert_scale * self.dropout(
+                self.experts[self.active_expert](self.ln2(x))
+            )
+
         return x + res * drop_mask
     
     def forward_checkpointed(self, x, mask=None):
@@ -214,7 +231,7 @@ class MiniGPT(PreTrainedModel):
         self.heads = heads
         self.hidden_dim = hidden_dim
         self.num_experts = config.num_experts
-        self.active_expert = 0
+        self.active_expert = None
         
         # Créer les blocs selon le type de weight sharing
         if weight_sharing == "none":

@@ -219,6 +219,7 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("inf")
     return logits
 
 
+
 def freeze_all(model):
     for p in model.parameters():
         p.requires_grad = False
@@ -234,7 +235,12 @@ def unfreeze_backbone(model):
     for name, p in model.named_parameters():
         if "experts." not in name or "experts.0." in name:
             p.requires_grad = True
-
+            
+def unfreeze_only_expert(model, expert_id):
+    for name, p in model.named_parameters():
+        if f"experts.{expert_id}." in name:
+            p.requires_grad = True
+            
 def configure_training_mode(model, mode: str, expert_id: int | None):
     """
     Configure automatiquement :
@@ -246,13 +252,13 @@ def configure_training_mode(model, mode: str, expert_id: int | None):
 
     if mode == "backbone":
         print("🧠 Training mode: BACKBONE (expert 0)")
-        model.set_active_expert(0)
+        model.set_active_expert(None)
         unfreeze_backbone(model)
 
     elif mode == "expert":
         print(f"🧠 Training mode: EXPERT {expert_id}")
         model.set_active_expert(expert_id)
-        unfreeze_expert(model, expert_id)
+        unfreeze_only_expert(model, expert_id)
 
     else:
         raise ValueError(f"Unknown training mode: {mode}")

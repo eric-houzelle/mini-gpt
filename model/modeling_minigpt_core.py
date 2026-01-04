@@ -33,7 +33,7 @@ class MiniGPTModel(nn.Module):
         self.depth = depth
         self.weight_sharing = config.weight_sharing
         self.num_experts = config.num_experts
-        self.active_expert = 0
+        self.active_expert = None
 
         # Positional embeddings only if not using RoPE
         if not config.use_rope:
