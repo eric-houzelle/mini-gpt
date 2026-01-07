@@ -18,7 +18,8 @@
     "hidden_dim": 3840,
     "weight_sharing": "none",
     "use_rope": true,
-    "use_gradient_checkpointing": false
+    "use_gradient_checkpointing": false,
+    "num_experts": 4
   },
   "data": {
     "max_texts": 500000,

@@ -132,17 +132,23 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.attn = SelfAttention(embed_dim, heads, dropout, max_seq_len=max_seq_len, use_rope=use_rope)
         self.ln1 = nn.LayerNorm(embed_dim)
-        self.experts = shared_experts
         
-        if self.experts is None:
-            self.ff_backbone = FFNExpert(embed_dim, hidden_dim)
+        # Toujours créer le backbone
+        self.ff_backbone = FFNExpert(embed_dim, hidden_dim)
+        
+        # Gestion des experts
+        if shared_experts is not None:
+            # Mode weight_sharing="ffn" : les experts sont partagés entre blocs
+            self.experts = shared_experts
+        else:
+            # Mode normal : chaque bloc a ses propres experts
             self.experts = nn.ModuleList([
                 FFNExpert(embed_dim, hidden_dim)
                 for _ in range(num_experts)
             ])
-
-            self.expert_scale = 0.1
-
+        
+        # Scaling pour l'expert additif : augmenté pour avoir un impact visible
+        self.expert_scale = 1.0
         self.active_expert = None
         
         self.ln2 = nn.LayerNorm(embed_dim)
@@ -242,7 +248,8 @@ class MiniGPT(PreTrainedModel):
                 for _ in range(depth)
             ])
         elif weight_sharing == "ffn":
-            # Partage uniquement les FFN (experts), attention séparée
+            # Partage uniquement les experts entre blocs, attention et backbone séparés
+            # Note: Le backbone FFN n'est PAS partagé, seulement les experts additifs
             shared_experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(num_experts)])
             self.blocks = nn.ModuleList([
                 TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1, 

@@ -230,13 +230,26 @@ def unfreeze_expert(model, expert_id: int):
             p.requires_grad = True
 
 def unfreeze_backbone(model):
-    # si tu veux entraîner le backbone (attention + embeddings + norms)
-    # ainsi que l'expert 0 (tronc commun)
+    """Entraîne UNIQUEMENT le backbone (attention + ff_backbone + embeddings + norms).
+    
+    Exclut TOUS les experts additifs (experts.0, experts.1, etc.)
+    Le backbone comprend :
+    - token_emb, pos_emb (si présent)
+    - attn (SelfAttention)
+    - ff_backbone (FFN de base, toujours actif)
+    - ln1, ln2, ln_f (LayerNorms)
+    """
     for name, p in model.named_parameters():
-        if "experts." not in name or "experts.0." in name:
+        # Dégeler tout SAUF les experts additifs
+        if "experts." not in name:
             p.requires_grad = True
             
 def unfreeze_only_expert(model, expert_id):
+    """Entraîne UNIQUEMENT un expert spécifique.
+    
+    Gèle le backbone et tous les autres experts.
+    Seul experts.{expert_id} sera entraînable.
+    """
     for name, p in model.named_parameters():
         if f"experts.{expert_id}." in name:
             p.requires_grad = True
@@ -244,24 +257,42 @@ def unfreeze_only_expert(model, expert_id):
 def configure_training_mode(model, mode: str, expert_id: int | None):
     """
     Configure automatiquement :
-    - expert actif
-    - paramètres entraînables
+    - expert actif pendant le forward
+    - paramètres entraînables (gelés/dégelés)
+    
+    Modes disponibles :
+    - "backbone" : entraîne uniquement le modèle de base (sans experts)
+    - "expert" : gèle le backbone, entraîne un expert spécifique
     """
 
     freeze_all(model)
 
     if mode == "backbone":
-        print("🧠 Training mode: BACKBONE (expert 0)")
+        print("🧠 Training mode: BACKBONE (modèle de base sans experts)")
+        print("   → ff_backbone, attention, embeddings, norms = ENTRAÎNABLES")
+        print("   → Tous les experts = GELÉS")
+        print("   → Aucun expert actif pendant le forward")
         model.set_active_expert(None)
         unfreeze_backbone(model)
 
     elif mode == "expert":
+        if expert_id is None:
+            raise ValueError("Mode 'expert' nécessite expert_id")
         print(f"🧠 Training mode: EXPERT {expert_id}")
+        print(f"   → experts.{expert_id} = ENTRAÎNABLE")
+        print(f"   → Backbone et autres experts = GELÉS")
+        print(f"   → Expert {expert_id} actif pendant le forward")
         model.set_active_expert(expert_id)
         unfreeze_only_expert(model, expert_id)
 
     else:
         raise ValueError(f"Unknown training mode: {mode}")
+    
+    # Afficher un résumé des paramètres entraînables
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"   → {trainable_params:,} / {total_params:,} paramètres entraînables ({100*trainable_params/total_params:.1f}%)")
+
 
 
 def generate_example_v2(

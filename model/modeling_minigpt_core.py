@@ -50,7 +50,9 @@ class MiniGPTModel(nn.Module):
             ])
 
         elif self.weight_sharing == "ffn":
-            shared_experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(num_experts)])
+            # Partage uniquement les experts entre blocs, attention et backbone séparés
+            # Note: Le backbone FFN n'est PAS partagé, seulement les experts additifs
+            shared_experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(config.num_experts)])
             self.blocks = nn.ModuleList([
                 TransformerBlock(embed_dim, heads, dropout, hidden_dim,
                                  shared_experts=shared_experts, max_seq_len=block_size,
