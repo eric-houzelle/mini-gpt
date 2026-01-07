@@ -159,31 +159,35 @@ class TransformerBlock(nn.Module):
         self.active_expert = expert_id
 
     def forward(self, x, mask=None):
-        if not self.training or self.layerdrop == 0:
-            x = x + self.dropout(self.attn(self.ln1(x), mask))
-            x = x + self.dropout(self.ff_backbone(self.ln2(x)))
+        # Layerdrop : skip le bloc entier avec probabilité layerdrop
+        # Compatible CUDA Graphs : pas de branchement CPU
+        if self.training and self.layerdrop > 0:
+            keep_prob = 1.0 - self.layerdrop
+            # Masque binaire : 1 = on garde le bloc, 0 = on skip
+            drop_mask = (torch.rand(x.shape[0], 1, 1, device=x.device) < keep_prob).float()
+        else:
+            drop_mask = None
+        
+        # Sauvegarder l'input pour le skip connection
+        residual = x
+        
+        # Attention avec connexion résiduelle
+        x = x + self.dropout(self.attn(self.ln1(x), mask))
+        
+        # FFN backbone avec connexion résiduelle
+        x = x + self.dropout(self.ff_backbone(self.ln2(x)))
 
-            # Expert additif (optionnel)
-            if self.active_expert is not None:
-                x = x + self.expert_scale * self.dropout(
-                    self.experts[self.active_expert](self.ln2(x))
-                )
-            return x
-
-        # Version compatible CUDA Graphs : pas de branchement CPU (.item())
-        # On génère un masque binaire 0 ou 1 sur le GPU par échantillon (B, 1, 1)
-        keep_prob = 1.0 - self.layerdrop
-        drop_mask = (torch.rand(x.shape[0], 1, 1, device=x.device) < keep_prob).float()
-
-        res = self.dropout(self.attn(self.ln1(x), mask))
-        res = res + self.dropout(self.ff_backbone(self.ln2(x)))
-
+        # Expert additif (optionnel) avec connexion résiduelle
         if self.active_expert is not None:
-            res = res + self.expert_scale * self.dropout(
+            x = x + self.expert_scale * self.dropout(
                 self.experts[self.active_expert](self.ln2(x))
             )
-
-        return x + res * drop_mask
+        
+        # Appliquer le layerdrop : si masque=0, retourner l'input original
+        if drop_mask is not None:
+            x = x * drop_mask + residual * (1.0 - drop_mask)
+        
+        return x
     
     def forward_checkpointed(self, x, mask=None):
         """Version avec gradient checkpointing pour économiser VRAM."""
@@ -243,7 +247,7 @@ class MiniGPT(PreTrainedModel):
         if weight_sharing == "none":
             # Comportement original : chaque bloc a ses propres poids
             self.blocks = nn.ModuleList([
-                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1, 
+                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.0, 
                                max_seq_len=block_size, use_rope=use_rope, num_experts=num_experts) 
                 for _ in range(depth)
             ])
@@ -252,13 +256,13 @@ class MiniGPT(PreTrainedModel):
             # Note: Le backbone FFN n'est PAS partagé, seulement les experts additifs
             shared_experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(num_experts)])
             self.blocks = nn.ModuleList([
-                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1, 
+                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.0, 
                                shared_experts=shared_experts, max_seq_len=block_size, use_rope=use_rope, num_experts=num_experts)
                 for _ in range(depth)
             ])
         elif weight_sharing == "full":
             # ALBERT-style : un seul bloc réutilisé depth fois
-            self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1,
+            self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.0,
                                                 max_seq_len=block_size, use_rope=use_rope, num_experts=num_experts)
             self.blocks = None  # On n'utilise pas de ModuleList dans ce cas
         else:

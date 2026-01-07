@@ -455,14 +455,37 @@ print(f"{'='*70}\n")
 
 if os.path.exists(MODEL_SAVE_PATH):
     checkpoint = torch.load(MODEL_SAVE_PATH, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-
+    
+    # Charger les poids avec vérification
+    missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    
     start_epoch = checkpoint['epoch'] + 1
     best_loss = checkpoint.get('val_loss', float("inf"))
     global_step = checkpoint.get('global_step', start_epoch * len(train_loader))
     scheduler_state_dict = checkpoint.get('scheduler_state_dict', None)
 
     print(f"\n✅ Checkpoint loaded from epoch {checkpoint['epoch']}")
+    
+    # Avertir si des clés importantes manquent
+    if missing_keys:
+        critical_missing = [k for k in missing_keys if 'ff_backbone' in k or 'experts' in k]
+        if critical_missing:
+            print(f"\n⚠️  ATTENTION: Clés critiques manquantes dans le checkpoint!")
+            print(f"   Cela peut causer une instabilité ou explosion de la loss.")
+            print(f"\n   Clés manquantes ({len(critical_missing)}):")
+            for key in critical_missing[:10]:  # Afficher les 10 premières
+                print(f"     - {key}")
+            if len(critical_missing) > 10:
+                print(f"     ... et {len(critical_missing) - 10} autres")
+            print(f"\n   💡 Solution: Supprimer le checkpoint et recommencer from scratch:")
+            print(f"      rm {MODEL_SAVE_PATH}")
+            print(f"\n   Ou renommer le checkpoint pour le sauvegarder:")
+            print(f"      mv {MODEL_SAVE_PATH} {MODEL_SAVE_PATH}.old")
+            print(f"\n   ⚠️  Continuer avec des poids aléatoires pour ces modules...")
+    
+    if unexpected_keys:
+        print(f"\n   ℹ️  Clés inattendues dans le checkpoint (ignorées): {len(unexpected_keys)}")
+
 else:
     start_epoch = 0
     best_loss = float("inf")

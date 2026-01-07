@@ -44,7 +44,7 @@ class MiniGPTModel(nn.Module):
         # Blocks
         if self.weight_sharing == "none":
             self.blocks = nn.ModuleList([
-                TransformerBlock(embed_dim, heads, dropout, hidden_dim,
+                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.0,
                                  max_seq_len=block_size, use_rope=config.use_rope, num_experts=config.num_experts)
                 for _ in range(depth)
             ])
@@ -54,14 +54,14 @@ class MiniGPTModel(nn.Module):
             # Note: Le backbone FFN n'est PAS partagé, seulement les experts additifs
             shared_experts = nn.ModuleList([FFNExpert(embed_dim, hidden_dim) for _ in range(config.num_experts)])
             self.blocks = nn.ModuleList([
-                TransformerBlock(embed_dim, heads, dropout, hidden_dim,
+                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.0,
                                  shared_experts=shared_experts, max_seq_len=block_size,
                                  use_rope=config.use_rope, num_experts=config.num_experts)
                 for _ in range(depth)
             ])
 
         elif self.weight_sharing == "full":
-            self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim,
+            self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.0,
                                                  max_seq_len=block_size, use_rope=config.use_rope, num_experts=config.num_experts)
             self.blocks = None
 
