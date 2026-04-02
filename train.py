@@ -27,9 +27,10 @@ DATASET_KEY = os.getenv("DATASET_KEY", "french-tinystories")
 DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
-EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Il est principalement connu")
+EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Prompt: En quelle année est sortie la chanson 'Baby' de Justin Bieber ? Answer: ")
 EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "500"))
-
+DATASET_FILTER_FIELD = os.getenv("DATASET_FILTER_FIELD")
+DATASET_FILTER_VALUE = os.getenv("DATASET_FILTER_VALUE")
 num_epochs = config["training"]["num_epochs"]
 batch_size = config["training"]["batch_size"]
 learning_rate = config["training"]["learning_rate"]
@@ -50,15 +51,23 @@ use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", T
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
 
+
 def load_tokenizer(tokenizer_name):
     tok = AutoTokenizer.from_pretrained(tokenizer_name)
     if tok.pad_token is None:
         if tok.eos_token is not None:
             tok.pad_token = tok.eos_token
-        elif tok.sep_token is not None:
-            tok.pad_token = tok.sep_token
         else:
             tok.add_special_tokens({"pad_token": "[PAD]"})
+#    special_tokens = {
+#        "additional_special_tokens": [
+#            "<|user|>",
+#            "<|assistant|>"
+#        ]
+#    }
+
+#    tok.add_special_tokens(special_tokens)
+
     return tok
 
 tokenizer = load_tokenizer(TOKENIZER_NAME)
@@ -81,6 +90,19 @@ if csv_path:
 else:
     dataset = load_dataset(DATASET_NAME)
     train_split_ds = dataset["train"]
+
+if DATASET_FILTER_FIELD and DATASET_FILTER_VALUE:
+    if DATASET_FILTER_FIELD not in train_split_ds.column_names:
+        print(f"⚠️ Warning: Filter field '{DATASET_FILTER_FIELD}' not found. Available columns: {train_split_ds.column_names}")
+    else:
+        # Support pour plusieurs termes séparés par des virgules (Logique OR)
+        filter_values = [v.strip().lower() for v in DATASET_FILTER_VALUE.split(",")]
+        print(f"🔍 Filtering dataset: rows where '{DATASET_FILTER_FIELD}' contains ANY of {filter_values}")
+        train_split_ds = train_split_ds.filter(
+            lambda x: any(val in str(x[DATASET_FILTER_FIELD]).lower() for val in filter_values)
+        )
+        print(f"✅ Filtered dataset: {len(train_split_ds)} rows remaining")
+
 
 if DATASET_TEMPLATE:
     class _SafeDict(dict):
@@ -183,89 +205,76 @@ def generate_example_v2(
     min_new_tokens=20,
     temperature=0.8,
     top_k=0,
-    top_p=0.9
+    top_p=0.9,
 ):
-    """Génère un exemple de texte pour suivi rapide pendant l'entraînement,
-    en utilisant Top-K et Top-P pour stabiliser la génération.
-    """
     model.eval()
 
-    # --- 1. Préparation du prompt ---
+    # Utiliser le modèle non compilé pour la génération
+    gen_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+
+    # --- Prompt ---
     if dataset_template:
         class _SafeDict(dict):
             def __missing__(self, key):
                 return eval_prompt
 
         formatter = string.Formatter()
-        field_names = {
-            field_name for _, field_name, _, _ in formatter.parse(dataset_template) if field_name
-        }
-        fmt = _SafeDict({name: eval_prompt for name in field_names})
+        fields = {f for _, f, _, _ in formatter.parse(dataset_template) if f}
+        fmt = _SafeDict({f: eval_prompt for f in fields})
         example_prompt = dataset_template.format_map(fmt)
         prompt_ids = tokenizer.encode(example_prompt, return_tensors="pt").to(device)
     else:
         example_prompt = eval_prompt
-        if not eval_prompt:
-             # Si eval_prompt est vide (pas de template) on commence par le token de début de séquence si possible
-             prompt_ids = torch.zeros((1, 1), dtype=torch.long, device=device) 
-        else:
-             # Encode le prompt d'évaluation standard
-             prompt_ids = tokenizer.encode(eval_prompt, return_tensors="pt").to(device)
-    # --- Fin Préparation du prompt ---
+        prompt_ids = tokenizer.encode(eval_prompt, return_tensors="pt").to(device)
 
     eos_id = tokenizer.eos_token_id
+    pad_id = tokenizer.pad_token_id
+    idx = prompt_ids
+
     with torch.no_grad():
-        idx = prompt_ids
-        for step in range(max_new_tokens):
-            # 1. Tronquer/Paddder l'entrée à block_size
-            idx_cond = idx[:, -block_size:]
-            
-            # (Remplacer le padding dynamique pour idx_cond par la fonction de padding de votre code original
-            # pour maintenir la compatibilité avec la logique de votre code :
-            # J'ai retiré le padding explicite ici, car votre modèle est entraîné à gérer les entrées
-            # tronquées si le contexte est plus grand que block_size.
-            # L'important est de s'assurer que l'entrée est toujours de taille <= block_size)
+        # 🔒 Désactiver AMP uniquement ici
+        with torch.cuda.amp.autocast(enabled=False):
+            for step in range(max_new_tokens):
+                idx_cond = idx[:, -block_size:]
 
-            # 2. Obtenir les logits du dernier jeton
-            logits = model(idx_cond).logits[:, -1, :] # Logits pour le prochain jeton
+                logits = gen_model(idx_cond).logits[:, -1, :].float()
 
-            # 3. Appliquer la Température
-            if temperature != 1.0:
-                logits = logits / temperature
-            
-            # 4. Appliquer Top-K et Top-P (le changement majeur)
-            # Logits de forme [1, vocab_size]
-            logits = top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
-            
-            # 5. Calculer les Probabilités
-            probs = torch.softmax(logits, dim=-1)
-            
-            # 6. Échantillonner
-            next_token = torch.multinomial(probs, num_samples=1)
+                if temperature != 1.0:
+                    logits = logits / temperature
 
-            # 7. Gérer le Minimum de Jetons avant EOS
-            if eos_id is not None and step < min_new_tokens:
-                # Re-échantillonner si le token est EOS et que nous n'avons pas atteint min_new_tokens
-                # Utiliser .item() pour la comparaison
-                while next_token.item() == eos_id:
-                    next_token = torch.multinomial(probs, num_samples=1)
+                # Empêcher EOS trop tôt (AVANT softmax)
+                if eos_id is not None and step < min_new_tokens:
+                    logits[:, eos_id] = -float("inf")
 
-            # 8. Ajouter le jeton et vérifier l'arrêt
-            idx = torch.cat((idx, next_token), dim=1)
-            if eos_id is not None and step >= min_new_tokens and next_token.item() == eos_id:
-                break
+                logits = top_k_top_p_filtering(
+                    logits, top_k=top_k, top_p=top_p
+                )
 
-        sample = idx[0]
+                probs = torch.softmax(logits, dim=-1)
 
-    # --- 2. Décodage du résultat ---
-    prompt_len = prompt_ids.shape[-1]
-    gen_only = sample[prompt_len:]
-    gen_tokens = gen_only.tolist()
-    
-    # Décodage en ignorant les jetons spéciaux (PAD, EOS, etc.)
+                # --- Sécurité numérique ---
+                if not torch.isfinite(probs).all():
+                    probs = torch.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
+
+                probs_sum = probs.sum(dim=-1, keepdim=True)
+
+                if (probs_sum <= 0).any():
+                    # fallback neutre (ultra rare)
+                    next_token = torch.argmax(logits, dim=-1, keepdim=True)
+                else:
+                    probs = probs / probs_sum
+                    next_token = torch.multinomial(probs, 1)
+
+                idx = torch.cat([idx, next_token], dim=1)
+
+                if eos_id is not None and step >= min_new_tokens:
+                    if next_token.item() == eos_id:
+                        break
+
+    sample = idx[0]
+    gen_tokens = sample[prompt_ids.shape[-1]:].tolist()
+
     gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
-    
-    # Décodage complet pour le debug
     gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
 
     return example_prompt, gen_text, gen_text_raw, gen_tokens
@@ -293,7 +302,7 @@ model_config = MiniGPTConfig(
 )
 
 model = MiniGPTForCausalLM(model_config).to(device)
-
+#model.resize_token_embeddings(len(tokenizer))
 total_params = sum(p.numel() for p in model.parameters())
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 

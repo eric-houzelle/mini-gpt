@@ -1,0 +1,25 @@
+{
+  "model_type": "minigpt",
+  "architectures": [
+    "MiniGPTForCausalLM"
+  ],
+  "auto_map": {
+    "AutoConfig": "configuration.MiniGPTConfig",
+    "AutoModelForCausalLM": "model.MiniGPTForCausalLM"
+  },
+  "tokenizer_class": "CamembertTokenizer",
+  "tokenizer_name": "camembert-base",
+  "vocab_size": 32005,
+  "pad_token_id": 1,
+  "bos_token_id": 0,
+  "eos_token_id": 2,
+  "embed_dim": 640,
+  "depth": 20,
+  "heads": 10,
+  "hidden_dim": 2560,
+  "block_size": 256,
+  "dropout": 0.1,
+  "use_rope": true,
+  "weight_sharing": "ffn",
+  "tie_word_embeddings": false
+}

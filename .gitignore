@@ -1,6 +1,38 @@
-temp.py
-.history
+# Python
 __pycache__/
-checkpoints/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Environnements virtuels
 mini-gpt-env/
+venv/
+.venv/
+
+# Checkpoints et poids
+checkpoints/
+*.pt
+*.bin
+
+# Logs et sorties
+nohup.out
+*.log
+*.err
+
+# Expériences
+experiments/
+
+# Backups
+*.save
+*.backup
+
+# IDE / éditeur
+.history
+.vscode/
+.idea/
+
+# Divers
+temp.py
 docs/
+.env
+.env_*
