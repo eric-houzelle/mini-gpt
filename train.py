@@ -28,7 +28,7 @@ DATASET_TEMPLATE = os.getenv("DATASET_TEMPLATE")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "checkpoints/best_miniGPT.pt")
 EVAL_PROMPT = os.getenv("EVAL_PROMPT", "Prompt: En quelle année est sortie la chanson 'Baby' de Justin Bieber ? Answer: ")
-EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "500"))
+EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "1000"))
 DATASET_FILTER_FIELD = os.getenv("DATASET_FILTER_FIELD")
 DATASET_FILTER_VALUE = os.getenv("DATASET_FILTER_VALUE")
 num_epochs = config["training"]["num_epochs"]
@@ -169,17 +169,21 @@ def get_current_block_size(step, schedule, max_block_size):
     return min(current, max_block_size)
 
 
-def compute_validation_loss(model, val_loader, loss_fn, device):
-    """Calcule la loss de validation moyenne sur l'ensemble du loader."""
+def compute_validation_loss(model, val_loader, loss_fn, device, max_batches=50):
+    """Calcule la loss de validation sur un sous-ensemble du loader pour aller plus vite."""
     model.eval()
     total_loss = 0.0
+    num_batches = 0
     with torch.no_grad():
         for xb_val, yb_val in val_loader:
+            if num_batches >= max_batches:
+                break
             xb_val, yb_val = xb_val.to(device), yb_val.to(device)
             logits = model(xb_val).logits
             B, T, C = logits.shape
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
-    return total_loss / len(val_loader)
+            num_batches += 1
+    return total_loss / num_batches
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("inf")):
     """
@@ -226,8 +230,8 @@ def generate_example_v2(
     device,
     dataset_template,
     eval_prompt,
-    max_new_tokens=128,
-    min_new_tokens=20,
+    max_new_tokens=64,
+    min_new_tokens=10,
     temperature=0.8,
     top_k=0,
     top_p=0.9,
@@ -412,7 +416,7 @@ optimizer = torch.optim.AdamW(
 
 loss_fn = nn.CrossEntropyLoss(
     ignore_index=tokenizer.pad_token_id,
-    label_smoothing=0.05
+    label_smoothing=0.02
 )
 
 
