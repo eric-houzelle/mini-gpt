@@ -201,7 +201,7 @@ def generate_example_v2(
     device,
     dataset_template,
     eval_prompt,
-    max_new_tokens=400,
+    max_new_tokens=128,
     min_new_tokens=20,
     temperature=0.8,
     top_k=0,
