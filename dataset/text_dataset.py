@@ -78,16 +78,17 @@ def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache", batch_si
             encoded = tokenizer(
                 texts[i : i + batch_size],
                 add_special_tokens=True,
-                truncation=True,
-                max_length=block_size,
+                truncation=False,
                 padding=False,
                 return_attention_mask=False,
             )["input_ids"]
             for ids in encoded:
-                if len(ids) >= 2:
-                    f.write(json.dumps(ids) + "\n")
-                    all_ids.append(ids)
-                    count += 1
+                for start in range(0, len(ids), block_size):
+                    chunk = ids[start:start + block_size]
+                    if len(chunk) >= 2:
+                        f.write(json.dumps(chunk) + "\n")
+                        all_ids.append(chunk)
+                        count += 1
 
     os.replace(tmp_path, cache_path)
     print(f"💾 Cached {count} sequences → {cache_path}")

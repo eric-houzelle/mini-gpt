@@ -1,21 +1,21 @@
 {
   "training": {
     "num_epochs": 300,
-    "batch_size": 32,
-    "learning_rate": 8e-4,
-    "warmup": 20000,
+    "batch_size": 128,
+    "learning_rate": 1.2e-3,
+    "warmup": 5000,
     "override_lr": null,
     "override_best_loss": null,
-    "gradient_accumulation_steps": 4
+    "gradient_accumulation_steps": 1
   },
   "model": {
-    "embed_dim": 640,
+    "embed_dim": 768,
     "depth": 14,
-    "heads": 10,
-    "num_kv_heads": 2,
+    "heads": 12,
+    "num_kv_heads": 4,
     "block_size": 256,
     "dropout": 0.05,
-    "hidden_dim": 3840,
+    "hidden_dim": 3072,
     "weight_sharing": "none",
     "use_rope": true,
     "use_gradient_checkpointing": false
@@ -24,6 +24,6 @@
     "max_texts": 500000,
     "train_split_ratio": 0.90,
     "pretokenize": true,
-    "progressive_block_sizes": [[0, 64], [2000, 128], [5000, 256]]
+    "progressive_block_sizes": [[0,128], [1000, 256], [2000, 256]]
   }
 }
