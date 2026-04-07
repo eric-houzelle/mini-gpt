@@ -22,6 +22,7 @@
   },
   "data": {
     "max_texts": 500000,
-    "train_split_ratio": 0.90
+    "train_split_ratio": 0.90,
+    "progressive_block_sizes": [[0, 64], [2000, 128], [5000, 256]]
   }
 }

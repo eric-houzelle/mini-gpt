@@ -52,6 +52,7 @@ use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", T
 
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
+progressive_schedule = config["data"].get("progressive_block_sizes")
 
 
 def load_tokenizer(tokenizer_name):
@@ -135,20 +136,32 @@ def now():
 
 
 
-def collate_fn(batch):
-    xs, ys = zip(*batch)
-
-    max_len = block_size - 1 
+def make_collate_fn(current_block_size):
+    """Return a collate_fn that pads/truncates to current_block_size."""
+    max_len = current_block_size - 1
     pad_id = tokenizer.pad_token_id
 
-    # Tronquer et pad pour garantir une longueur fixe (évite les formes dynamiques CUDAGraph)
-    xs = [x[:max_len] if len(x) > max_len else x for x in xs]
-    ys = [y[:max_len] if len(y) > max_len else y for y in ys]
+    def collate_fn(batch):
+        xs, ys = zip(*batch)
+        xs = [x[:max_len] if len(x) > max_len else x for x in xs]
+        ys = [y[:max_len] if len(y) > max_len else y for y in ys]
+        xs = [torch.nn.functional.pad(x, (0, max_len - len(x)), value=pad_id) for x in xs]
+        ys = [torch.nn.functional.pad(y, (0, max_len - len(y)), value=pad_id) for y in ys]
+        return torch.stack(xs), torch.stack(ys)
 
-    xs = [torch.nn.functional.pad(x, (0, max_len - len(x)), value=pad_id) for x in xs]
-    ys = [torch.nn.functional.pad(y, (0, max_len - len(y)), value=pad_id) for y in ys]
+    return collate_fn
 
-    return torch.stack(xs), torch.stack(ys)
+
+def get_current_block_size(step, schedule, max_block_size):
+    """Return the block_size for a given optimizer step based on the progressive schedule."""
+    if not schedule:
+        return max_block_size
+    current = schedule[0][1]
+    for start_step, size in schedule:
+        if step >= start_step:
+            current = size
+    return min(current, max_block_size)
+
 
 def compute_validation_loss(model, val_loader, loss_fn, device):
     """Calcule la loss de validation moyenne sur l'ensemble du loader."""
@@ -289,6 +302,9 @@ def generate_example_v2(
 
 
 
+initial_block_size = get_current_block_size(0, progressive_schedule, block_size)
+current_block_size = initial_block_size
+collate_fn = make_collate_fn(current_block_size)
 train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
@@ -345,6 +361,9 @@ print(f"   - Embed dim: {embed_dim}")
 print(f"   - Attention: {gqa_label}")
 print(f"   - Hidden dim: {hidden_dim}")
 print(f"   - Block size: {block_size}")
+if progressive_schedule:
+    stages = " → ".join(f"{s}@step{s_}" for s_, s in progressive_schedule)
+    print(f"   - Progressive resizing: {stages}")
 effective_batch = batch_size * grad_accum_steps
 print(f"\n🔬 STLM Techniques:")
 print(f"   - Weight sharing: {weight_sharing.upper()}")
@@ -444,7 +463,7 @@ patience = 10
 
 for epoch in range(start_epoch, num_epochs):
     print(f"\n{'='*70}")
-    print(f"[{now()}] Epoch {epoch+1}/{num_epochs}")
+    print(f"[{now()}] Epoch {epoch+1}/{num_epochs}  (block_size={current_block_size})")
     print(f"{'='*70}")
     model.train()
     optimizer.zero_grad()
@@ -487,6 +506,15 @@ for epoch in range(start_epoch, num_epochs):
                 print(f"[{now()}] [Epoch {epoch+1} | Step {global_step}] train_loss={running_loss:.4f} | LR={current_lr:.2e}")
 
             running_loss = 0.0
+
+            new_bs = get_current_block_size(global_step, progressive_schedule, block_size)
+            if new_bs != current_block_size:
+                current_block_size = new_bs
+                collate_fn = make_collate_fn(current_block_size)
+                train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+                val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+                print(f"📐 Progressive resizing @ step {global_step}: block_size → {current_block_size}")
+                break
 
             # Validation et génération périodiques
             if global_step % EVAL_EVERY_STEPS == 0:
