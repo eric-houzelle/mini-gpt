@@ -176,6 +176,7 @@ def compute_validation_loss(model, val_loader, loss_fn, device):
     with torch.no_grad():
         for xb_val, yb_val in val_loader:
             xb_val, yb_val = xb_val.to(device), yb_val.to(device)
+            torch.compiler.cudagraph_mark_step_begin()
             logits = model(xb_val).logits
             B, T, C = logits.shape
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
@@ -478,6 +479,7 @@ for epoch in range(start_epoch, num_epochs):
     for i, (xb, yb) in enumerate(train_loader):
         xb, yb = xb.to(device), yb.to(device)
 
+        torch.compiler.cudagraph_mark_step_begin()
         with torch.amp.autocast("cuda"):
             logits = model(xb).logits
             B, T, C = logits.shape

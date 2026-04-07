@@ -1,3 +1,4 @@
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -165,7 +166,7 @@ class TransformerBlock(nn.Module):
         self.layerdrop = layerdrop
 
     def forward(self, x, mask=None, past_kv=None, use_cache=False):
-        if self.training and torch.rand(1).item() < self.layerdrop:
+        if self.training and random.random() < self.layerdrop:
             return (x, None) if use_cache else x
         attn_out, new_kv = self.attn(self.ln1(x), mask, past_kv=past_kv, use_cache=use_cache)
         x = x + self.dropout(attn_out)
