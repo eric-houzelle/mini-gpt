@@ -5,7 +5,8 @@
     "learning_rate": 8e-4,
     "warmup": 20000,
     "override_lr": null,
-    "override_best_loss": null
+    "override_best_loss": null,
+    "gradient_accumulation_steps": 4
   },
   "model": {
     "embed_dim": 640,

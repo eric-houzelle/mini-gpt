@@ -37,6 +37,7 @@ learning_rate = config["training"]["learning_rate"]
 warmup = config["training"]["warmup"]
 override_lr = os.getenv("OVERRIDE_LR") or config["training"].get("override_lr")
 override_best_loss = os.getenv("OVERRIDE_BEST_LOSS") or config["training"].get("override_best_loss")
+grad_accum_steps = config["training"].get("gradient_accumulation_steps", 1)
 
 embed_dim = config["model"]["embed_dim"]
 depth = config["model"]["depth"]
@@ -342,10 +343,15 @@ print(f"   - Embed dim: {embed_dim}")
 print(f"   - Attention: {gqa_label}")
 print(f"   - Hidden dim: {hidden_dim}")
 print(f"   - Block size: {block_size}")
+effective_batch = batch_size * grad_accum_steps
 print(f"\n🔬 STLM Techniques:")
 print(f"   - Weight sharing: {weight_sharing.upper()}")
 print(f"   - Position encoding: {'RoPE' if use_rope else 'Learned'}")
 print(f"   - FFN activation: SwiGLU")
+print(f"\n⚡ Training:")
+print(f"   - Micro-batch: {batch_size}")
+print(f"   - Gradient accumulation: {grad_accum_steps} steps")
+print(f"   - Effective batch: {effective_batch}")
 print(f"\n📈 Parameters:")
 print(f"   - Total: {human_readable(total_params)} ({total_params:,})")
 print(f"   - Trainable: {human_readable(trainable_params)} ({trainable_params:,})")
@@ -438,96 +444,101 @@ for epoch in range(start_epoch, num_epochs):
     print(f"[{now()}] Epoch {epoch+1}/{num_epochs}")
     print(f"{'='*70}")
     model.train()
+    optimizer.zero_grad()
+    running_loss = 0.0
+
     for i, (xb, yb) in enumerate(train_loader):
         xb, yb = xb.to(device), yb.to(device)
-        # logits = model(xb)
-        # B, T, C = logits.shape
-        # loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
-        optimizer.zero_grad()
+
         with torch.amp.autocast("cuda"):
             logits = model(xb).logits
             B, T, C = logits.shape
             loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
+            loss = loss / grad_accum_steps
 
         scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        scheduler.step()
-        global_step += 1 
+        running_loss += loss.item()
 
-        ## without amp scaler
-        # loss.backward() 
-        # optimizer.step()
-        # scheduler.step()
+        is_accum_step = (i + 1) % grad_accum_steps == 0
+        is_last_batch = (i + 1) == len(train_loader)
 
-        if i % 50 == 0:
-            trackio.log(
-                {
-                    "train/loss": loss.item(),
-                    "epoch": epoch + 1,
-                    "lr": scheduler.get_last_lr()[0],
-                },
-                step=i,
-            )
+        if is_accum_step or is_last_batch:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+            scheduler.step()
+            global_step += 1
 
-        if i % 100 == 0:
-            current_lr = scheduler.get_last_lr()[0]
-            print(f"[{now()}] [Epoch {epoch+1} | Step {i}] train_loss={loss.item():.4f} | LR={current_lr:.2e}")
+            if global_step % 50 == 0:
+                trackio.log(
+                    {
+                        "train/loss": running_loss,
+                        "epoch": epoch + 1,
+                        "lr": scheduler.get_last_lr()[0],
+                    },
+                    step=global_step,
+                )
 
-        # Validation et génération périodiques
-        if global_step % EVAL_EVERY_STEPS == 0:
-            val_loss = compute_validation_loss(model, val_loader, loss_fn, device)
-            improvement = best_loss - val_loss
-            if best_loss != float("inf"):
-                print(f"[{now()}] [step {global_step}] Validation loss: {val_loss:.4f} (best: {best_loss:.4f}, diff: {improvement:+.4f})")
-            else:
-                print(f"[{now()}] [step {global_step}] Validation loss: {val_loss:.4f}")
+            if global_step % 100 == 0:
+                current_lr = scheduler.get_last_lr()[0]
+                print(f"[{now()}] [Epoch {epoch+1} | Step {global_step}] train_loss={running_loss:.4f} | LR={current_lr:.2e}")
 
-            if val_loss < best_loss:
-                model_to_save = model._orig_mod if hasattr(model, '_orig_mod') else model
-                best_loss = val_loss
-                epochs_without_improvement = 0
-                torch.save({
-                    'model_state_dict': model_to_save.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': scheduler.state_dict(),
-                    'epoch': epoch,
-                    'global_step': global_step,
-                    'val_loss': val_loss
-                }, MODEL_SAVE_PATH)
-                print(f"[{now()}] ✅ New best model saved! (val_loss: {val_loss:.4f})")
-            else:
-                epochs_without_improvement += 1
-                print(f"[{now()}] ⚠️  No improvement for {epochs_without_improvement} eval(s)")
+            running_loss = 0.0
 
-                if epochs_without_improvement >= patience:
-                    print(f"[{now()}] 💡 Consider reducing learning rate or stopping soon (no improvement for {epochs_without_improvement} evals)")
+            # Validation et génération périodiques
+            if global_step % EVAL_EVERY_STEPS == 0:
+                val_loss = compute_validation_loss(model, val_loader, loss_fn, device)
+                improvement = best_loss - val_loss
+                if best_loss != float("inf"):
+                    print(f"[{now()}] [step {global_step}] Validation loss: {val_loss:.4f} (best: {best_loss:.4f}, diff: {improvement:+.4f})")
+                else:
+                    print(f"[{now()}] [step {global_step}] Validation loss: {val_loss:.4f}")
 
-            trackio.log(
-                {
-                    "val/loss": val_loss,
-                    "best_val_loss": best_loss,
-                    "epochs_without_improvement": epochs_without_improvement,
-                    "epoch": epoch + 1,
-                },
-                step=global_step,
-            )
-                
-            _, gen_text, gen_text_raw, gen_tokens = generate_example_v2(
-                model,
-                tokenizer,
-                block_size,
-                device,
-                DATASET_TEMPLATE,
-                EVAL_PROMPT,
-                temperature=0.7, # Température légèrement réduite
-                top_k=0,
-                top_p=0.9
-            )
-            print(f"[{now()}] Exemple génération v2 (suite de l'invite):\n{gen_text}")
-            if not gen_text:
-                print(f"[DEBUG] gen_tokens v2 (len={len(gen_tokens)}): {gen_tokens}")
-                print(f"[DEBUG] gen_text_raw v2: {gen_text_raw}")
+                if val_loss < best_loss:
+                    model_to_save = model._orig_mod if hasattr(model, '_orig_mod') else model
+                    best_loss = val_loss
+                    epochs_without_improvement = 0
+                    torch.save({
+                        'model_state_dict': model_to_save.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'scheduler_state_dict': scheduler.state_dict(),
+                        'epoch': epoch,
+                        'global_step': global_step,
+                        'val_loss': val_loss
+                    }, MODEL_SAVE_PATH)
+                    print(f"[{now()}] ✅ New best model saved! (val_loss: {val_loss:.4f})")
+                else:
+                    epochs_without_improvement += 1
+                    print(f"[{now()}] ⚠️  No improvement for {epochs_without_improvement} eval(s)")
 
-            model.train()
+                    if epochs_without_improvement >= patience:
+                        print(f"[{now()}] 💡 Consider reducing learning rate or stopping soon (no improvement for {epochs_without_improvement} evals)")
+
+                trackio.log(
+                    {
+                        "val/loss": val_loss,
+                        "best_val_loss": best_loss,
+                        "epochs_without_improvement": epochs_without_improvement,
+                        "epoch": epoch + 1,
+                    },
+                    step=global_step,
+                )
+
+                _, gen_text, gen_text_raw, gen_tokens = generate_example_v2(
+                    model,
+                    tokenizer,
+                    block_size,
+                    device,
+                    DATASET_TEMPLATE,
+                    EVAL_PROMPT,
+                    temperature=0.7,
+                    top_k=0,
+                    top_p=0.9
+                )
+                print(f"[{now()}] Exemple génération v2 (suite de l'invite):\n{gen_text}")
+                if not gen_text:
+                    print(f"[DEBUG] gen_tokens v2 (len={len(gen_tokens)}): {gen_tokens}")
+                    print(f"[DEBUG] gen_text_raw v2: {gen_text_raw}")
+
+                model.train()
 trackio.finish()
