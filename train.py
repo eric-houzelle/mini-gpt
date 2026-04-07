@@ -8,7 +8,7 @@ from transformers import AutoTokenizer
 import string
 from datasets import load_dataset
 from torch.optim.lr_scheduler import OneCycleLR
-from dataset.text_dataset import TextDataset, pretokenize
+from dataset.text_dataset import TextDataset, pretokenize_cached
 from model.configuration import MiniGPTConfig
 from model.modeling_minigpt import MiniGPTForCausalLM
 from torch.nn.utils.rnn import pad_sequence
@@ -123,8 +123,8 @@ else:
         )
     texts = train_split_ds[DATASET_KEY][:max_texts]
 
-print(f"⏳ Pre-tokenizing {len(texts)} texts (one-time cost)...")
-all_token_ids = pretokenize(texts, tokenizer, block_size)
+print(f"⏳ Pre-tokenizing {len(texts)} texts...")
+all_token_ids = pretokenize_cached(texts, tokenizer, block_size)
 print(f"✅ Pre-tokenized: {len(all_token_ids)} sequences kept (>= 2 tokens)")
 
 split = int(train_split_ratio * len(all_token_ids))
