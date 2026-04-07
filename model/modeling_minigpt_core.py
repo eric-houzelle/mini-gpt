@@ -86,43 +86,20 @@ class MiniGPTModel(nn.Module):
         return_dict=None,
         **kwargs
     ):
-        """
-        Forward pass du modèle core.
-        
-        Args:
-            input_ids: Tokens d'entrée [batch_size, seq_len]
-            attention_mask: Masque d'attention (non utilisé pour l'instant)
-            past_key_values: Cache KV pour génération (non supporté pour l'instant)
-            use_cache: Si True, retourne past_key_values (non supporté pour l'instant)
-            output_attentions: Si True, retourne les attentions (non supporté pour l'instant)
-            output_hidden_states: Si True, retourne tous les hidden states (non supporté pour l'instant)
-            return_dict: Si True, retourne un BaseModelOutputWithPast, sinon un tuple
-        
-        Returns:
-            BaseModelOutputWithPast si return_dict=True, sinon tuple (hidden_states,)
-        """
         return_dict = return_dict if return_dict is not None else True
-        
-        # Pour l'instant, on ignore ces paramètres (non supportés pour l'instant)
-        # On les ignore silencieusement pour la compatibilité avec l'écosystème Hugging Face
-        if past_key_values is not None:
-            # TODO: Implémenter le support de past_key_values pour la génération efficace
-            pass
-        if output_attentions:
-            # TODO: Implémenter le retour des attentions
-            pass
-        if output_hidden_states:
-            # TODO: Implémenter le retour de tous les hidden states
-            pass
-        
+        use_cache = use_cache if use_cache is not None else False
+
         B, T = input_ids.shape
         x = self.token_emb(input_ids)
 
-        if self.pos_emb is not None:  # not using RoPE
-            pos = torch.arange(T, device=input_ids.device).unsqueeze(0)
+        if self.pos_emb is not None:
+            past_len = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+            pos = torch.arange(past_len, past_len + T, device=input_ids.device).unsqueeze(0)
             x = x + self.pos_emb(pos)
 
-        mask = torch.tril(torch.ones(T, T, device=input_ids.device)).unsqueeze(0).unsqueeze(0)
+        mask = None
+
+        new_key_values = []
 
         if self.use_gradient_checkpointing and self.training:
             if self.weight_sharing == "full":
@@ -132,21 +109,35 @@ class MiniGPTModel(nn.Module):
                 for block in self.blocks:
                     x = checkpoint(block.forward_checkpointed, x, mask, use_reentrant=False)
         else:
-            if self.weight_sharing == "full":
-                for _ in range(self.depth):
-                    x = self.shared_block(x, mask)
+            if use_cache:
+                if self.weight_sharing == "full":
+                    for layer_idx in range(self.depth):
+                        past_kv = past_key_values[layer_idx] if past_key_values is not None else None
+                        x, kv = self.shared_block(x, mask, past_kv=past_kv, use_cache=True)
+                        new_key_values.append(kv)
+                else:
+                    for layer_idx, block in enumerate(self.blocks):
+                        past_kv = past_key_values[layer_idx] if past_key_values is not None else None
+                        x, kv = block(x, mask, past_kv=past_kv, use_cache=True)
+                        new_key_values.append(kv)
             else:
-                for block in self.blocks:
-                    x = block(x, mask)
+                if self.weight_sharing == "full":
+                    for _ in range(self.depth):
+                        x = self.shared_block(x, mask)
+                else:
+                    for block in self.blocks:
+                        x = block(x, mask)
 
         hidden_states = self.ln_f(x)
-        
+
+        present_key_values = tuple(new_key_values) if use_cache else None
+
         if not return_dict:
             return (hidden_states,)
         
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=None,
+            past_key_values=present_key_values,
             hidden_states=None,
             attentions=None,
         )

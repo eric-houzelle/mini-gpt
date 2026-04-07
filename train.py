@@ -238,17 +238,21 @@ def generate_example_v2(
     idx = prompt_ids
 
     with torch.no_grad():
-        # 🔒 Désactiver AMP uniquement ici
         with torch.cuda.amp.autocast(enabled=False):
+            past_key_values = None
             for step in range(max_new_tokens):
-                idx_cond = idx[:, -block_size:]
+                if past_key_values is None:
+                    input_ids = idx[:, -block_size:]
+                else:
+                    input_ids = idx[:, -1:]
 
-                logits = gen_model(idx_cond).logits[:, -1, :].float()
+                outputs = gen_model(input_ids, past_key_values=past_key_values, use_cache=True)
+                logits = outputs.logits[:, -1, :].float()
+                past_key_values = outputs.past_key_values
 
                 if temperature != 1.0:
                     logits = logits / temperature
 
-                # Empêcher EOS trop tôt (AVANT softmax)
                 if eos_id is not None and step < min_new_tokens:
                     logits[:, eos_id] = -float("inf")
 
@@ -258,14 +262,12 @@ def generate_example_v2(
 
                 probs = torch.softmax(logits, dim=-1)
 
-                # --- Sécurité numérique ---
                 if not torch.isfinite(probs).all():
                     probs = torch.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
 
                 probs_sum = probs.sum(dim=-1, keepdim=True)
 
                 if (probs_sum <= 0).any():
-                    # fallback neutre (ultra rare)
                     next_token = torch.argmax(logits, dim=-1, keepdim=True)
                 else:
                     probs = probs / probs_sum

@@ -39,23 +39,22 @@ class RoPEEmbedding(nn.Module):
         x1, x2 = x[..., :x.shape[-1]//2], x[..., x.shape[-1]//2:]
         return torch.cat((-x2, x1), dim=-1)
     
-    def forward(self, q, k):
+    def forward(self, q, k, offset=0):
         """Applique RoPE aux queries et keys.
         
         Args:
             q: queries [batch, heads, seq_len, head_dim]
             k: keys [batch, heads, seq_len, head_dim]
+            offset: position offset for KV cache (number of previously cached tokens)
         
         Returns:
             q_rot, k_rot: queries et keys avec positions encodées
         """
         seq_len = q.shape[2]
         
-        # Tronquer les embeddings si la séquence est plus courte
-        cos = self.cos_cached[:, :, :seq_len, :]
-        sin = self.sin_cached[:, :, :seq_len, :]
+        cos = self.cos_cached[:, :, offset:offset + seq_len, :]
+        sin = self.sin_cached[:, :, offset:offset + seq_len, :]
         
-        # Appliquer la rotation
         q_rot = (q * cos) + (self.rotate_half(q) * sin)
         k_rot = (k * cos) + (self.rotate_half(k) * sin)
         
@@ -122,7 +121,7 @@ class SelfAttention(nn.Module):
         if use_rope:
             self.rope = RoPEEmbedding(self.head_dim, max_seq_len=max_seq_len)
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, past_kv=None, use_cache=False):
         B, T, C = x.size()
 
         q = self.q_proj(x).reshape(B, T, self.num_heads, self.head_dim).transpose(1, 2)
@@ -130,20 +129,27 @@ class SelfAttention(nn.Module):
         v = self.v_proj(x).reshape(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
         if self.use_rope:
-            q, k = self.rope(q, k)
+            offset = past_kv[0].shape[2] if past_kv is not None else 0
+            q, k = self.rope(q, k, offset=offset)
 
-        if self.num_kv_groups > 1:
-            k = k.repeat_interleave(self.num_kv_groups, dim=1)
-            v = v.repeat_interleave(self.num_kv_groups, dim=1)
+        if past_kv is not None:
+            k = torch.cat([past_kv[0], k], dim=2)
+            v = torch.cat([past_kv[1], v], dim=2)
 
+        new_kv = (k, v) if use_cache else None
+
+        k_expanded = k.repeat_interleave(self.num_kv_groups, dim=1) if self.num_kv_groups > 1 else k
+        v_expanded = v.repeat_interleave(self.num_kv_groups, dim=1) if self.num_kv_groups > 1 else v
+
+        is_causal = past_kv is None
         attn = F.scaled_dot_product_attention(
-            q, k, v,
+            q, k_expanded, v_expanded,
             attn_mask=None,
-            is_causal=True,
+            is_causal=is_causal,
             dropout_p=self.attn_dropout if self.training else 0.0,
         )
         attn = attn.transpose(1, 2).contiguous().view(B, T, C)
-        return self.resid_dropout(self.out(attn))
+        return self.resid_dropout(self.out(attn)), new_kv
 
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim=512, layerdrop=0.1,
@@ -157,16 +163,20 @@ class TransformerBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.layerdrop = layerdrop
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, past_kv=None, use_cache=False):
         if self.training and torch.rand(1).item() < self.layerdrop:
-            return x
-        x = x + self.dropout(self.attn(self.ln1(x), mask))
+            return (x, None) if use_cache else x
+        attn_out, new_kv = self.attn(self.ln1(x), mask, past_kv=past_kv, use_cache=use_cache)
+        x = x + self.dropout(attn_out)
         x = x + self.dropout(self.ff(self.ln2(x)))
-        return x
+        return (x, new_kv) if use_cache else x
     
     def forward_checkpointed(self, x, mask=None):
-        """Version avec gradient checkpointing pour économiser VRAM."""
-        return self.forward(x, mask)
+        """Version avec gradient checkpointing (training only, no cache)."""
+        attn_out, _ = self.attn(self.ln1(x), mask)
+        x = x + self.dropout(attn_out)
+        x = x + self.dropout(self.ff(self.ln2(x)))
+        return x
 
 class MiniGPT(PreTrainedModel):
     config_class = MiniGPTConfig

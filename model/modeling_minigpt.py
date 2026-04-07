@@ -132,10 +132,13 @@ class MiniGPTForCausalLM(PreTrainedModel):
 
     
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        """Prépare les inputs pour la génération."""
-        # Pour l'instant, on ne supporte pas le past_key_values
-        # Mais on garde la structure pour compatibilité future
-        return {"input_ids": input_ids}
+        if past_key_values is not None:
+            input_ids = input_ids[:, -1:]
+        return {
+            "input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "use_cache": True,
+        }
     
     @torch.no_grad()
     def generate(self, input_ids=None, max_new_tokens=100, temperature=1.0, top_k=None, top_p=None, 
