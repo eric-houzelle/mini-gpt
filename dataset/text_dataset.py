@@ -1,16 +1,14 @@
 from torch.utils.data import Dataset
 import torch
 import os
+import json
 import hashlib
 from tqdm import tqdm
 
 
 class TextDataset(Dataset):
-    """LM dataset from pre-tokenized sequences.
+    """LM dataset from pre-tokenized sequences."""
 
-    Args:
-        token_ids: list of lists of int (already tokenized, truncated to block_size).
-    """
     def __init__(self, token_ids):
         self.token_ids = token_ids
 
@@ -24,38 +22,73 @@ class TextDataset(Dataset):
         return x, y
 
 
-def pretokenize(texts, tokenizer, block_size, batch_size=10_000):
-    """Tokenize texts in batches with a progress bar.
+class LazyTextDataset(Dataset):
+    """LM dataset that tokenizes on-the-fly (no pre-tokenization needed)."""
 
-    Sequences shorter than 2 tokens are discarded (can't form an x/y pair).
-    """
-    all_ids = []
-    for i in tqdm(range(0, len(texts), batch_size), desc="Tokenizing", unit="batch"):
-        encoded = tokenizer(
-            texts[i : i + batch_size],
+    def __init__(self, texts, tokenizer, block_size):
+        self.texts = texts
+        self.tokenizer = tokenizer
+        self.block_size = block_size
+
+    def __len__(self):
+        return len(self.texts)
+
+    def __getitem__(self, idx):
+        ids = self.tokenizer(
+            self.texts[idx],
             add_special_tokens=True,
             truncation=True,
-            max_length=block_size,
+            max_length=self.block_size,
             padding=False,
             return_attention_mask=False,
         )["input_ids"]
-        all_ids.extend(ids for ids in encoded if len(ids) >= 2)
-    return all_ids
+        if len(ids) < 2:
+            ids = [0, 0]
+        x = torch.tensor(ids[:-1], dtype=torch.long)
+        y = torch.tensor(ids[1:], dtype=torch.long)
+        return x, y
 
 
-def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache"):
-    """Tokenize once and cache to disk. Subsequent calls load from cache."""
+def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache", batch_size=10_000):
+    """Tokenize in batches and stream to a JSONL cache file.
+
+    Uses incremental writes to avoid RAM spikes from torch.save.
+    On subsequent calls, loads from cache (~2s).
+    """
     os.makedirs(cache_dir, exist_ok=True)
     key = hashlib.sha256(
         f"{len(texts)}_{block_size}_{tokenizer.name_or_path}".encode()
     ).hexdigest()[:16]
-    cache_path = os.path.join(cache_dir, f"tokens_{key}.pt")
+    cache_path = os.path.join(cache_dir, f"tokens_{key}.jsonl")
 
     if os.path.exists(cache_path):
         print(f"♻️  Loading cached tokens from {cache_path}")
-        return torch.load(cache_path, weights_only=False)
+        all_ids = []
+        with open(cache_path, "r") as f:
+            for line in f:
+                all_ids.append(json.loads(line))
+        return all_ids
 
-    all_ids = pretokenize(texts, tokenizer, block_size)
-    torch.save(all_ids, cache_path)
-    print(f"💾 Cached {len(all_ids)} sequences → {cache_path}")
+    tmp_path = cache_path + ".tmp"
+    count = 0
+    all_ids = []
+
+    with open(tmp_path, "w") as f:
+        for i in tqdm(range(0, len(texts), batch_size), desc="Tokenizing", unit="batch"):
+            encoded = tokenizer(
+                texts[i : i + batch_size],
+                add_special_tokens=True,
+                truncation=True,
+                max_length=block_size,
+                padding=False,
+                return_attention_mask=False,
+            )["input_ids"]
+            for ids in encoded:
+                if len(ids) >= 2:
+                    f.write(json.dumps(ids) + "\n")
+                    all_ids.append(ids)
+                    count += 1
+
+    os.replace(tmp_path, cache_path)
+    print(f"💾 Cached {count} sequences → {cache_path}")
     return all_ids

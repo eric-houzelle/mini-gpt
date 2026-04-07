@@ -8,7 +8,7 @@ from transformers import AutoTokenizer
 import string
 from datasets import load_dataset
 from torch.optim.lr_scheduler import OneCycleLR
-from dataset.text_dataset import TextDataset, pretokenize_cached
+from dataset.text_dataset import TextDataset, LazyTextDataset, pretokenize_cached
 from model.configuration import MiniGPTConfig
 from model.modeling_minigpt import MiniGPTForCausalLM
 from torch.nn.utils.rnn import pad_sequence
@@ -52,6 +52,7 @@ use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", T
 
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
+use_pretokenize = config["data"].get("pretokenize", True)
 progressive_schedule = config["data"].get("progressive_block_sizes")
 
 
@@ -123,13 +124,18 @@ else:
         )
     texts = train_split_ds[DATASET_KEY][:max_texts]
 
-print(f"⏳ Pre-tokenizing {len(texts)} texts...")
-all_token_ids = pretokenize_cached(texts, tokenizer, block_size)
-print(f"✅ Pre-tokenized: {len(all_token_ids)} sequences kept (>= 2 tokens)")
-
-split = int(train_split_ratio * len(all_token_ids))
-train_ds = TextDataset(all_token_ids[:split])
-val_ds   = TextDataset(all_token_ids[split:])
+if use_pretokenize:
+    print(f"⏳ Pre-tokenizing {len(texts)} texts...")
+    all_token_ids = pretokenize_cached(texts, tokenizer, block_size)
+    print(f"✅ Pre-tokenized: {len(all_token_ids)} sequences kept (>= 2 tokens)")
+    split = int(train_split_ratio * len(all_token_ids))
+    train_ds = TextDataset(all_token_ids[:split])
+    val_ds   = TextDataset(all_token_ids[split:])
+else:
+    print(f"⚡ Lazy tokenization mode (no pre-tokenization)")
+    split = int(train_split_ratio * len(texts))
+    train_ds = LazyTextDataset(texts[:split], tokenizer, block_size)
+    val_ds   = LazyTextDataset(texts[split:], tokenizer, block_size)
 
 def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
