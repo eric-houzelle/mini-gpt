@@ -27,7 +27,7 @@ print(f"✅ Device: {device}")
 # Tokenizer
 # -----------------------------------------------------------------------------
 def load_tokenizer(name: str):
-    tok = AutoTokenizer.from_pretrained(name)
+    tok = AutoTokenizer.from_pretrained(name, use_fast=True)
     if tok.pad_token is None:
         if tok.eos_token is not None:
             tok.pad_token = tok.eos_token

@@ -56,7 +56,7 @@ progressive_schedule = config["data"].get("progressive_block_sizes")
 
 
 def load_tokenizer(tokenizer_name):
-    tok = AutoTokenizer.from_pretrained(tokenizer_name)
+    tok = AutoTokenizer.from_pretrained(tokenizer_name, use_fast=True)
     if tok.pad_token is None:
         if tok.eos_token is not None:
             tok.pad_token = tok.eos_token
