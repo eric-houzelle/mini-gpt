@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from .model import RoPEEmbedding, SwiGLU, SelfAttention, TransformerBlock
+from .model import RoPEEmbedding, RMSNorm, SwiGLU, SelfAttention, TransformerBlock
 
 from .configuration import MiniGPTConfig
 
@@ -64,7 +64,7 @@ class MiniGPTModel(nn.Module):
                                                  num_kv_heads=num_kv_heads)
             self.blocks = None
 
-        self.ln_f = nn.LayerNorm(embed_dim)
+        self.ln_f = RMSNorm(embed_dim)
         
     def get_input_embeddings(self):
         return self.token_emb

@@ -62,6 +62,21 @@ class RoPEEmbedding(nn.Module):
         return q_rot, k_rot
 
 
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization (Zhang & Sennrich, 2019).
+
+    Faster than LayerNorm: no mean-subtraction, no bias, single reduction.
+    Used by LLaMA, Mistral, Gemma, Qwen.
+    """
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+
+    def forward(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
+
+
 class SwiGLU(nn.Module):
     """SwiGLU activation function as described in the Super Tiny LM paper.
     SwiGLU(x) = (Swish(xW) ⊗ xV)W2
@@ -137,10 +152,9 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.attn = SelfAttention(embed_dim, heads, dropout, max_seq_len=max_seq_len,
                                   use_rope=use_rope, num_kv_heads=num_kv_heads)
-        self.ln1 = nn.LayerNorm(embed_dim)
-        # Utiliser un FFN partagé si fourni, sinon créer un nouveau
+        self.ln1 = RMSNorm(embed_dim)
         self.ff = shared_ff if shared_ff is not None else SwiGLU(embed_dim, hidden_dim)
-        self.ln2 = nn.LayerNorm(embed_dim)
+        self.ln2 = RMSNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
         self.layerdrop = layerdrop
 
@@ -227,8 +241,8 @@ class MiniGPT(PreTrainedModel):
         else:
             raise ValueError(f"weight_sharing doit être 'none', 'ffn' ou 'full', pas '{weight_sharing}'")
         
-        self.ln_f = nn.LayerNorm(embed_dim)
-        self.head = nn.Linear(embed_dim, vocab_size, bias=False) # on enleve bias pour que head et token_emb est la meme taille
+        self.ln_f = RMSNorm(embed_dim)
+        self.head = nn.Linear(embed_dim, vocab_size, bias=False)
         self.head.weight = self.token_emb.weight #On réutilise les poids de la matrice token_emb pour les tetes 
         self.block_size = block_size
         self.apply(self._init_weights)
@@ -273,9 +287,8 @@ class MiniGPT(PreTrainedModel):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif isinstance(module, nn.LayerNorm):
+        elif isinstance(module, RMSNorm):
             torch.nn.init.ones_(module.weight)
-            torch.nn.init.zeros_(module.bias)
             
             
     def count_parameters(self):
