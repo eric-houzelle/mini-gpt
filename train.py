@@ -379,7 +379,8 @@ optimizer = torch.optim.AdamW(
     ],
     lr=learning_rate,
     betas=(0.9, 0.95),
-    eps=1e-8
+    eps=1e-8,
+    fused=True
 )
 
 loss_fn = nn.CrossEntropyLoss(
