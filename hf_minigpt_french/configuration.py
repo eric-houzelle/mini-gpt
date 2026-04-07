@@ -17,6 +17,7 @@ class MiniGPTConfig(PretrainedConfig):
         embed_dim=256,
         depth=8,
         heads=8,
+        num_kv_heads=None,
         dropout=0.1,
         hidden_dim=512,
         weight_sharing="none",
@@ -30,6 +31,7 @@ class MiniGPTConfig(PretrainedConfig):
         self.embed_dim = embed_dim
         self.depth = depth
         self.heads = heads
+        self.num_kv_heads = num_kv_heads if num_kv_heads is not None else heads
         self.dropout = dropout
         self.hidden_dim = hidden_dim
         self.weight_sharing = weight_sharing

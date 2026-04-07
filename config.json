@@ -11,6 +11,7 @@
     "embed_dim": 640,
     "depth": 14,
     "heads": 10,
+    "num_kv_heads": 2,
     "block_size": 256,
     "dropout": 0.05,
     "hidden_dim": 3840,

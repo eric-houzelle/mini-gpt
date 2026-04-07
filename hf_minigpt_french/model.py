@@ -78,33 +78,48 @@ class SwiGLU(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, embed_dim, heads, dropout, max_seq_len=2048, use_rope=True):
+    """Multi-Head Attention with optional Grouped-Query Attention (GQA).
+
+    When num_kv_heads < num_heads, K and V projections are smaller and each
+    KV head is shared across num_heads // num_kv_heads query heads.
+    When num_kv_heads == num_heads this is standard MHA (fully backward-compatible).
+    """
+    def __init__(self, embed_dim, heads, dropout, max_seq_len=2048, use_rope=True, num_kv_heads=None):
         super().__init__()
         self.embed_dim = embed_dim
-        self.heads = heads
+        self.num_heads = heads
+        self.num_kv_heads = num_kv_heads if num_kv_heads is not None else heads
         self.head_dim = embed_dim // heads
+        self.num_kv_groups = self.num_heads // self.num_kv_heads
         self.use_rope = use_rope
-        
-        self.q_proj = nn.Linear(embed_dim, embed_dim)
-        self.k_proj = nn.Linear(embed_dim, embed_dim)
-        self.v_proj = nn.Linear(embed_dim, embed_dim)
-        self.out = nn.Linear(embed_dim, embed_dim)
-        self.attn_dropout = dropout 
+
+        assert heads % self.num_kv_heads == 0, (
+            f"num_heads ({heads}) must be divisible by num_kv_heads ({self.num_kv_heads})"
+        )
+
+        self.q_proj = nn.Linear(embed_dim, self.num_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(embed_dim, self.num_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(embed_dim, self.num_kv_heads * self.head_dim, bias=False)
+        self.out = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.attn_dropout = dropout
         self.resid_dropout = nn.Dropout(dropout)
-        
-        # RoPE embeddings (pas de paramètres apprenables)
+
         if use_rope:
             self.rope = RoPEEmbedding(self.head_dim, max_seq_len=max_seq_len)
 
     def forward(self, x, mask=None):
         B, T, C = x.size()
-        q = self.q_proj(x).reshape(B, T, self.heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).reshape(B, T, self.heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).reshape(B, T, self.heads, self.head_dim).transpose(1, 2)
-        
-        # Appliquer RoPE aux queries et keys si activé
+
+        q = self.q_proj(x).reshape(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).reshape(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).reshape(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
         if self.use_rope:
             q, k = self.rope(q, k)
+
+        if self.num_kv_groups > 1:
+            k = k.repeat_interleave(self.num_kv_groups, dim=1)
+            v = v.repeat_interleave(self.num_kv_groups, dim=1)
 
         attn = F.scaled_dot_product_attention(
             q, k, v,
@@ -116,9 +131,11 @@ class SelfAttention(nn.Module):
         return self.resid_dropout(self.out(attn))
 
 class TransformerBlock(nn.Module):
-    def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim = 512, layerdrop=0.1, shared_ff=None, max_seq_len=2048, use_rope=True):
+    def __init__(self, embed_dim, heads, dropout=0.1, hidden_dim=512, layerdrop=0.1,
+                 shared_ff=None, max_seq_len=2048, use_rope=True, num_kv_heads=None):
         super().__init__()
-        self.attn = SelfAttention(embed_dim, heads, dropout, max_seq_len=max_seq_len, use_rope=use_rope)
+        self.attn = SelfAttention(embed_dim, heads, dropout, max_seq_len=max_seq_len,
+                                  use_rope=use_rope, num_kv_heads=num_kv_heads)
         self.ln1 = nn.LayerNorm(embed_dim)
         # Utiliser un FFN partagé si fourni, sinon créer un nouveau
         self.ff = shared_ff if shared_ff is not None else SwiGLU(embed_dim, hidden_dim)
@@ -161,6 +178,7 @@ class MiniGPT(PreTrainedModel):
         embed_dim = config.embed_dim
         depth = config.depth
         heads = config.heads
+        num_kv_heads = config.num_kv_heads
         dropout = config.dropout
         hidden_dim = config.hidden_dim
         weight_sharing = config.weight_sharing
@@ -186,25 +204,25 @@ class MiniGPT(PreTrainedModel):
         
         # Créer les blocs selon le type de weight sharing
         if weight_sharing == "none":
-            # Comportement original : chaque bloc a ses propres poids
             self.blocks = nn.ModuleList([
-                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1, 
-                               max_seq_len=block_size, use_rope=use_rope) 
+                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1,
+                                 max_seq_len=block_size, use_rope=use_rope,
+                                 num_kv_heads=num_kv_heads)
                 for _ in range(depth)
             ])
         elif weight_sharing == "ffn":
-            # Partage uniquement les FFN, attention séparée
             shared_ff = SwiGLU(embed_dim, hidden_dim)
             self.blocks = nn.ModuleList([
-                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1, 
-                               shared_ff=shared_ff, max_seq_len=block_size, use_rope=use_rope)
+                TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1,
+                                 shared_ff=shared_ff, max_seq_len=block_size,
+                                 use_rope=use_rope, num_kv_heads=num_kv_heads)
                 for _ in range(depth)
             ])
         elif weight_sharing == "full":
-            # ALBERT-style : un seul bloc réutilisé depth fois
             self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim, layerdrop=0.1,
-                                                max_seq_len=block_size, use_rope=use_rope)
-            self.blocks = None  # On n'utilise pas de ModuleList dans ce cas
+                                                 max_seq_len=block_size, use_rope=use_rope,
+                                                 num_kv_heads=num_kv_heads)
+            self.blocks = None
         else:
             raise ValueError(f"weight_sharing doit être 'none', 'ffn' ou 'full', pas '{weight_sharing}'")
         

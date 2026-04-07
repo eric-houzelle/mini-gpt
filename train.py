@@ -41,6 +41,7 @@ override_best_loss = os.getenv("OVERRIDE_BEST_LOSS") or config["training"].get("
 embed_dim = config["model"]["embed_dim"]
 depth = config["model"]["depth"]
 heads = config["model"]["heads"]
+num_kv_heads = config["model"].get("num_kv_heads", heads)
 block_size = config["model"]["block_size"]
 dropout = config["model"]["dropout"]
 hidden_dim = config["model"]["hidden_dim"]
@@ -294,10 +295,11 @@ model_config = MiniGPTConfig(
     embed_dim=embed_dim,
     depth=depth,
     heads=heads,
+    num_kv_heads=num_kv_heads,
     dropout=dropout,
     hidden_dim=hidden_dim,
-    weight_sharing=weight_sharing,  # STLM: "none", "ffn" ou "full"
-    use_rope=use_rope,  # STLM: RoPE au lieu de learned pos embeddings
+    weight_sharing=weight_sharing,
+    use_rope=use_rope,
     use_gradient_checkpointing=use_gradient_checkpointing
 )
 
@@ -329,10 +331,11 @@ def human_readable(num):
 print(f"\n{'='*70}")
 print(f"MODEL INITIALIZED - Super Tiny Language Model (STLM)")
 print(f"{'='*70}")
+gqa_label = f"GQA {heads}Q/{num_kv_heads}KV" if num_kv_heads < heads else f"MHA {heads}"
 print(f"\n📊 Architecture:")
 print(f"   - Layers: {depth}")
 print(f"   - Embed dim: {embed_dim}")
-print(f"   - Heads: {heads}")
+print(f"   - Attention: {gqa_label}")
 print(f"   - Hidden dim: {hidden_dim}")
 print(f"   - Block size: {block_size}")
 print(f"\n🔬 STLM Techniques:")

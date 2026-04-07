@@ -23,6 +23,7 @@ class MiniGPTModel(nn.Module):
         embed_dim = config.embed_dim
         depth = config.depth
         heads = config.heads
+        num_kv_heads = config.num_kv_heads
         dropout = config.dropout
         hidden_dim = config.hidden_dim
 
@@ -43,7 +44,8 @@ class MiniGPTModel(nn.Module):
         if self.weight_sharing == "none":
             self.blocks = nn.ModuleList([
                 TransformerBlock(embed_dim, heads, dropout, hidden_dim,
-                                 max_seq_len=block_size, use_rope=config.use_rope)
+                                 max_seq_len=block_size, use_rope=config.use_rope,
+                                 num_kv_heads=num_kv_heads)
                 for _ in range(depth)
             ])
 
@@ -52,13 +54,14 @@ class MiniGPTModel(nn.Module):
             self.blocks = nn.ModuleList([
                 TransformerBlock(embed_dim, heads, dropout, hidden_dim,
                                  shared_ff=shared_ff, max_seq_len=block_size,
-                                 use_rope=config.use_rope)
+                                 use_rope=config.use_rope, num_kv_heads=num_kv_heads)
                 for _ in range(depth)
             ])
 
         elif self.weight_sharing == "full":
             self.shared_block = TransformerBlock(embed_dim, heads, dropout, hidden_dim,
-                                                 max_seq_len=block_size, use_rope=config.use_rope)
+                                                 max_seq_len=block_size, use_rope=config.use_rope,
+                                                 num_kv_heads=num_kv_heads)
             self.blocks = None
 
         self.ln_f = nn.LayerNorm(embed_dim)
