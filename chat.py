@@ -1,0 +1,164 @@
+"""
+Interactive chat with the SFT-finetuned MiniGPT model.
+
+Usage:
+    python chat.py
+    python chat.py --checkpoint checkpoints/best_miniGPT_sft.pt
+    python chat.py --temperature 0.5 --max_tokens 200
+"""
+
+import os
+import json
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers import AutoTokenizer
+from dotenv import load_dotenv
+
+from model.configuration import MiniGPTConfig
+from model.modeling_minigpt import MiniGPTForCausalLM
+from dataset.chat_dataset import add_chat_tokens, format_chat, SPECIAL_TOKENS
+
+load_dotenv()
+
+CONFIG_PATH = os.getenv("SFT_CONFIG_PATH", "config_sft.json")
+with open(CONFIG_PATH, "r") as f:
+    config = json.load(f)
+
+CHECKPOINT_PATH = os.getenv("SFT_SAVE_PATH", "checkpoints/best_miniGPT_sft.pt")
+TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision("high")
+
+
+# ---------------------------------------------------------------------------
+# Tokenizer
+# ---------------------------------------------------------------------------
+def load_tokenizer(name):
+    tok = AutoTokenizer.from_pretrained(name, use_fast=True)
+    if tok.pad_token is None:
+        if tok.eos_token is not None:
+            tok.pad_token = tok.eos_token
+        else:
+            tok.add_special_tokens({"pad_token": "[PAD]"})
+    return tok
+
+
+tokenizer = load_tokenizer(TOKENIZER_NAME)
+add_chat_tokens(tokenizer)
+
+all_ids = list(tokenizer.get_vocab().values())
+vocab_size = max(len(tokenizer), max(all_ids) + 1) if all_ids else len(tokenizer)
+
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+model_cfg = config["model"]
+model_config = MiniGPTConfig(
+    vocab_size=vocab_size,
+    block_size=model_cfg["block_size"],
+    embed_dim=model_cfg["embed_dim"],
+    depth=model_cfg["depth"],
+    heads=model_cfg["heads"],
+    num_kv_heads=model_cfg.get("num_kv_heads", model_cfg["heads"]),
+    dropout=0.0,
+    hidden_dim=model_cfg["hidden_dim"],
+    weight_sharing=model_cfg.get("weight_sharing", "none"),
+    use_rope=model_cfg.get("use_rope", True),
+    use_gradient_checkpointing=False,
+)
+
+model = MiniGPTForCausalLM(model_config)
+
+if not os.path.exists(CHECKPOINT_PATH):
+    raise FileNotFoundError(f"Checkpoint introuvable: {CHECKPOINT_PATH}")
+
+checkpoint = torch.load(CHECKPOINT_PATH, map_location="cpu")
+state = checkpoint.get("model_state_dict", checkpoint)
+state = {k: v for k, v in state.items() if "rope.cos_cached" not in k and "rope.sin_cached" not in k}
+model.load_state_dict(state, strict=False)
+model.lm_head.weight = model.model.token_emb.weight
+
+model = model.to(device)
+model.eval()
+
+val_loss = checkpoint.get("val_loss", "N/A")
+step = checkpoint.get("global_step", "N/A")
+print(f"Modèle chargé depuis {CHECKPOINT_PATH} (val_loss={val_loss}, step={step})")
+print(f"Paramètres: {sum(p.numel() for p in model.parameters()):,}")
+print(f"Device: {device}\n")
+
+end_tag = SPECIAL_TOKENS["end"]
+end_token_id = tokenizer.convert_tokens_to_ids(end_tag)
+
+
+# ---------------------------------------------------------------------------
+# Generation
+# ---------------------------------------------------------------------------
+@torch.no_grad()
+def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=300):
+    text = format_chat(user_msg, "", None)
+    if text.endswith(end_tag):
+        text = text[: -len(end_tag)]
+
+    input_ids = tokenizer.encode(text, return_tensors="pt").to(device)
+    block_size = model_config.block_size
+
+    with torch.amp.autocast("cuda", enabled=torch.cuda.is_available()):
+        output = model.generate(
+            input_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=50,
+            eos_token_id=end_token_id,
+            min_new_tokens=3,
+        )
+
+    gen_tokens = output[0][input_ids.shape[-1]:]
+    response = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=True).strip()
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Interactive loop
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Chat with MiniGPT SFT")
+    parser.add_argument("--checkpoint", type=str, default=CHECKPOINT_PATH)
+    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--top_p", type=float, default=0.9)
+    parser.add_argument("--max_tokens", type=int, default=300)
+    args = parser.parse_args()
+
+    print("=" * 60)
+    print("  MiniGPT Chat — tapez 'quit' pour quitter")
+    print("=" * 60)
+    print()
+
+    while True:
+        try:
+            user_input = input("Vous > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nAu revoir !")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("quit", "exit", "q"):
+            print("Au revoir !")
+            break
+
+        response = generate_response(
+            user_input,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_new_tokens=args.max_tokens,
+        )
+        print(f"MiniGPT > {response}\n")
