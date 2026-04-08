@@ -93,14 +93,18 @@ print(f"Paramètres: {sum(p.numel() for p in model.parameters()):,}")
 print(f"Device: {device}\n")
 
 end_tag = SPECIAL_TOKENS["end"]
-end_token_id = tokenizer.convert_tokens_to_ids(end_tag)
+# convert_tokens_to_ids can fail for added tokens on SentencePiece tokenizers;
+# encode the tag directly and take the first non-special ID.
+_end_ids = tokenizer.encode(end_tag, add_special_tokens=False)
+end_token_id = _end_ids[0] if _end_ids else tokenizer.eos_token_id
+print(f"End token: '{end_tag}' → id={end_token_id}")
 
 
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
 @torch.no_grad()
-def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=300):
+def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=150):
     text = format_chat(user_msg, "", None)
     if text.endswith(end_tag):
         text = text[: -len(end_tag)]
@@ -134,7 +138,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=str, default=CHECKPOINT_PATH)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
-    parser.add_argument("--max_tokens", type=int, default=300)
+    parser.add_argument("--max_tokens", type=int, default=150)
     args = parser.parse_args()
 
     print("=" * 60)
@@ -155,10 +159,11 @@ if __name__ == "__main__":
             print("Au revoir !")
             break
 
+        print("MiniGPT > ", end="", flush=True)
         response = generate_response(
             user_input,
             temperature=args.temperature,
             top_p=args.top_p,
             max_new_tokens=args.max_tokens,
         )
-        print(f"MiniGPT > {response}\n")
+        print(f"{response}\n")
