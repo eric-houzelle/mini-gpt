@@ -152,14 +152,13 @@ def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=150, 
             top5_tokens = [(tokenizer.decode([tid], skip_special_tokens=False), f"{p:.3f}") for tid, p in zip(top5.indices[0].tolist(), top5.values[0].tolist())]
             print(f"[DEBUG] Step {step}: generated id={token_id} ({repr(tokenizer.decode([token_id], skip_special_tokens=False))}) | top5={top5_tokens}")
 
-        if token_id == end_token_id and step >= 3:
-            break
         if token_id == end_token_id:
-            # Too early to stop — pick the next best non-special token
+            if step >= 3 or len(gen_tokens) >= 3:
+                break
+            # Too early to stop — pick the most likely non-end token instead
             logits[0, end_token_id] = -float("inf")
-            probs = F.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
-            token_id = next_token.item()
+            token_id = logits[0].argmax().item()
+            next_token = torch.tensor([[token_id]], device=device)
 
         idx = torch.cat((idx, next_token), dim=1)
         gen_tokens.append(token_id)
