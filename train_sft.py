@@ -216,16 +216,27 @@ else:
     print(f"⚠️  No pretrained checkpoint at {PRETRAINED_PATH} — training from scratch!")
 
 # Resize embeddings for the new chat tokens.
-# New token embeddings are initialized to the mean of existing embeddings
-# so they start in a reasonable region of the embedding space.
+# Manual resize to guarantee weight tying is preserved.
 if new_vocab_size != original_vocab_size:
-    old_emb = model.model.token_emb.weight.data
-    mean_emb = old_emb.mean(dim=0)
-    model.resize_token_embeddings(new_vocab_size)
+    old_emb_weight = model.model.token_emb.weight.data
+    mean_emb = old_emb_weight.mean(dim=0)
+
+    new_emb = nn.Embedding(new_vocab_size, embed_dim)
     with torch.no_grad():
-        model.model.token_emb.weight.data[original_vocab_size:] = mean_emb
-    model_config.vocab_size = new_vocab_size
+        new_emb.weight[:original_vocab_size] = old_emb_weight
+        new_emb.weight[original_vocab_size:] = mean_emb
+
+    model.model.token_emb = new_emb
+    model.lm_head = nn.Linear(embed_dim, new_vocab_size, bias=False)
+    model.lm_head.weight = model.model.token_emb.weight  # re-tie
+    model.config.vocab_size = new_vocab_size
     print(f"[{now()}] Embeddings resized: {original_vocab_size} → {new_vocab_size}")
+
+# Sanity check: verify token IDs are within vocab range
+sample_ids = train_ds[0][0]
+max_id = sample_ids.max().item()
+assert max_id < new_vocab_size, f"Token ID {max_id} >= vocab_size {new_vocab_size}!"
+print(f"[{now()}] Token ID sanity check passed (max_id={max_id}, vocab={new_vocab_size})")
 
 model = model.to(device)
 
@@ -361,7 +372,6 @@ trackio.init(
 )
 
 scaler = torch.amp.GradScaler("cuda")
-model = torch.compile(model)
 
 for epoch in range(start_epoch, num_epochs):
     print(f"\n{'='*70}")
@@ -414,7 +424,7 @@ for epoch in range(start_epoch, num_epochs):
 
                 if val_loss < best_loss:
                     best_loss = val_loss
-                    model_to_save = model._orig_mod if hasattr(model, "_orig_mod") else model
+                    model_to_save = model
                     torch.save(
                         {
                             "model_state_dict": model_to_save.state_dict(),
