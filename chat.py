@@ -93,25 +93,45 @@ print(f"Paramètres: {sum(p.numel() for p in model.parameters()):,}")
 print(f"Device: {device}\n")
 
 end_tag = SPECIAL_TOKENS["end"]
-# convert_tokens_to_ids can fail for added tokens on SentencePiece tokenizers;
-# encode the tag directly and take the first non-special ID.
 _end_ids = tokenizer.encode(end_tag, add_special_tokens=False)
 end_token_id = _end_ids[0] if _end_ids else tokenizer.eos_token_id
+
+# Also collect ALL special token IDs so we can stop on any of them
+all_special_ids = set()
+for tag in SPECIAL_TOKENS.values():
+    ids = tokenizer.encode(tag, add_special_tokens=False)
+    all_special_ids.update(ids)
+if tokenizer.eos_token_id is not None:
+    all_special_ids.add(tokenizer.eos_token_id)
+
 print(f"End token: '{end_tag}' → id={end_token_id}")
+print(f"All stop IDs: {all_special_ids}")
 
 
 # ---------------------------------------------------------------------------
-# Generation — manual loop to avoid the while-resample trap in model.generate
+# Prompt building — construct the inference prompt directly
+# ---------------------------------------------------------------------------
+def build_prompt(user_msg, system_msg=None):
+    """Build the ChatML prompt for inference, ending right after <|assistant|>\\n
+    so the model generates the response content."""
+    sys = system_msg or "Tu es un assistant utile et concis. Réponds en français."
+    S, U, A, E = SPECIAL_TOKENS["system"], SPECIAL_TOKENS["user"], SPECIAL_TOKENS["assistant"], SPECIAL_TOKENS["end"]
+    return f"{S}\n{sys}{E}\n{U}\n{user_msg}{E}\n{A}\n"
+
+
+# ---------------------------------------------------------------------------
+# Generation — manual loop, stops on any special token
 # ---------------------------------------------------------------------------
 @torch.no_grad()
-def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=150, stream=False):
-    text = format_chat(user_msg, "", None)
-    if text.endswith(end_tag):
-        text = text[: -len(end_tag)]
-
-    idx = tokenizer.encode(text, return_tensors="pt").to(device)
+def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=150, stream=False, debug=False):
+    prompt = build_prompt(user_msg)
+    idx = tokenizer.encode(prompt, return_tensors="pt").to(device)
     block_size = model_config.block_size
     gen_tokens = []
+
+    if debug:
+        print(f"\n[DEBUG] Prompt ({idx.shape[-1]} tokens): {repr(prompt[:200])}")
+        print(f"[DEBUG] Last 10 token IDs: {idx[0, -10:].tolist()}")
 
     for step in range(max_new_tokens):
         idx_cond = idx[:, -block_size:]
@@ -135,7 +155,12 @@ def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=150, 
         next_token = torch.multinomial(probs, num_samples=1)
         token_id = next_token.item()
 
-        if token_id == end_token_id:
+        if debug and step < 5:
+            top5 = torch.topk(probs, 5)
+            top5_tokens = [(tokenizer.decode([tid], skip_special_tokens=False), f"{p:.3f}") for tid, p in zip(top5.indices[0].tolist(), top5.values[0].tolist())]
+            print(f"[DEBUG] Step {step}: generated id={token_id} ({repr(tokenizer.decode([token_id], skip_special_tokens=False))}) | top5={top5_tokens}")
+
+        if token_id in all_special_ids:
             break
 
         idx = torch.cat((idx, next_token), dim=1)
@@ -160,6 +185,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--max_tokens", type=int, default=150)
+    parser.add_argument("--debug", action="store_true", help="Show debug info for first 5 tokens")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -187,5 +213,6 @@ if __name__ == "__main__":
             top_p=args.top_p,
             max_new_tokens=args.max_tokens,
             stream=True,
+            debug=args.debug,
         )
         print("\n")
