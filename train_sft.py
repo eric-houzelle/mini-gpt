@@ -188,7 +188,7 @@ val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn
 # Model — load pretrained then resize embeddings
 # ---------------------------------------------------------------------------
 model_config = MiniGPTConfig(
-    vocab_size=original_vocab_size,
+    vocab_size=new_vocab_size,
     block_size=block_size,
     embed_dim=embed_dim,
     depth=depth,
@@ -206,8 +206,12 @@ model = MiniGPTForCausalLM(model_config)
 if os.path.exists(PRETRAINED_PATH):
     checkpoint = torch.load(PRETRAINED_PATH, map_location="cpu")
     state = checkpoint.get("model_state_dict", checkpoint)
-    state = {k: v for k, v in state.items() if "rope.cos_cached" not in k and "rope.sin_cached" not in k}
+    state = {
+        k: v for k, v in state.items()
+        if "rope.cos_cached" not in k and "rope.sin_cached" not in k and "lm_head" not in k
+    }
     model.load_state_dict(state, strict=False)
+    model.lm_head.weight = model.model.token_emb.weight  # re-tie after load
     print(f"[{now()}] Pretrained checkpoint loaded from {PRETRAINED_PATH}")
     pretrained_loss = checkpoint.get("val_loss", "N/A")
     pretrained_step = checkpoint.get("global_step", "N/A")
@@ -215,22 +219,15 @@ if os.path.exists(PRETRAINED_PATH):
 else:
     print(f"⚠️  No pretrained checkpoint at {PRETRAINED_PATH} — training from scratch!")
 
-# Resize embeddings for the new chat tokens.
-# Manual resize to guarantee weight tying is preserved.
-if new_vocab_size != original_vocab_size:
-    old_emb_weight = model.model.token_emb.weight.data
-    mean_emb = old_emb_weight.mean(dim=0)
-
-    new_emb = nn.Embedding(new_vocab_size, embed_dim)
+# Initialize the new chat token embeddings to the mean of pretrained embeddings.
+# The model was created with new_vocab_size, so the embedding layer already has
+# the right size. The pretrained weights only cover original_vocab_size rows;
+# load_state_dict(strict=False) left the new rows at their random init.
+if new_vocab_size > original_vocab_size:
     with torch.no_grad():
-        new_emb.weight[:original_vocab_size] = old_emb_weight
-        new_emb.weight[original_vocab_size:] = mean_emb
-
-    model.model.token_emb = new_emb
-    model.lm_head = nn.Linear(embed_dim, new_vocab_size, bias=False)
-    model.lm_head.weight = model.model.token_emb.weight  # re-tie
-    model.config.vocab_size = new_vocab_size
-    print(f"[{now()}] Embeddings resized: {original_vocab_size} → {new_vocab_size}")
+        mean_emb = model.model.token_emb.weight[:original_vocab_size].mean(dim=0)
+        model.model.token_emb.weight[original_vocab_size:] = mean_emb
+    print(f"[{now()}] New token embeddings initialized ({original_vocab_size} → {new_vocab_size})")
 
 # Sanity check: verify token IDs are within vocab range
 sample_ids = train_ds[0][0]
