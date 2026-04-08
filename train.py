@@ -344,11 +344,12 @@ trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 # Afficher les stats détaillées du modèle
 model_stats = model.count_parameters()
 
-def warmup_then_constant(optimizer, warmup_steps):
+def warmup_then_cosine(optimizer, warmup_steps, total_steps, min_lr_ratio=0.1):
     def lr_lambda(step):
         if step < warmup_steps:
             return step / warmup_steps
-        return 1.0  # LR = learning_rate
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1.0 + math.cos(math.pi * progress))
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
@@ -444,7 +445,7 @@ else:
 
 total_steps = num_epochs * len(train_loader)
 
-scheduler = warmup_then_constant(optimizer, warmup_steps=warmup)
+scheduler = warmup_then_cosine(optimizer, warmup_steps=warmup, total_steps=total_steps)
 
 if scheduler_state_dict is not None:
     scheduler.load_state_dict(scheduler_state_dict)
@@ -495,6 +496,8 @@ for epoch in range(start_epoch, num_epochs):
         is_last_batch = (i + 1) == len(train_loader)
 
         if is_accum_step or is_last_batch:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
