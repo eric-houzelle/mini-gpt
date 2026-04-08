@@ -94,9 +94,12 @@ def load_tokenizer(name):
 tokenizer = load_tokenizer(TOKENIZER_NAME)
 original_vocab_size = len(tokenizer)
 added_tokens = add_chat_tokens(tokenizer)
-new_vocab_size = len(tokenizer)
+# Some SentencePiece tokenizers (like camembert) assign IDs beyond len(tokenizer).
+# Use the actual max ID to guarantee no out-of-bounds embedding lookups.
+all_ids = list(tokenizer.get_vocab().values())
+new_vocab_size = max(len(tokenizer), max(all_ids) + 1) if all_ids else len(tokenizer)
 print(f"[{now()}] Tokenizer: {TOKENIZER_NAME}")
-print(f"   Vocab: {original_vocab_size} → {new_vocab_size} (+{new_vocab_size - original_vocab_size} chat tokens)")
+print(f"   Vocab: {original_vocab_size} → {new_vocab_size} (len={len(tokenizer)}, max_id={max(all_ids)})")
 
 
 # ---------------------------------------------------------------------------
