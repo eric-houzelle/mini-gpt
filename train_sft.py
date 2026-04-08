@@ -137,7 +137,7 @@ def load_conversations():
             user_msg, assistant_msg = None, None
             for turn in turns:
                 role = turn.get("role", turn.get("from", ""))
-                content = turn.get("content", turn.get("value", ""))
+                content = turn.get("content", turn.get("text", turn.get("value", "")))
                 if role in ("user", "human") and user_msg is None:
                     user_msg = content
                 elif role in ("assistant", "gpt") and assistant_msg is None:
