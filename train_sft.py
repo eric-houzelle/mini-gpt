@@ -206,6 +206,7 @@ model = MiniGPTForCausalLM(model_config)
 if os.path.exists(PRETRAINED_PATH):
     checkpoint = torch.load(PRETRAINED_PATH, map_location="cpu")
     state = checkpoint.get("model_state_dict", checkpoint)
+    state = {k: v for k, v in state.items() if "rope.cos_cached" not in k and "rope.sin_cached" not in k}
     model.load_state_dict(state, strict=False)
     print(f"[{now()}] Pretrained checkpoint loaded from {PRETRAINED_PATH}")
     pretrained_loss = checkpoint.get("val_loss", "N/A")
