@@ -206,28 +206,34 @@ model = MiniGPTForCausalLM(model_config)
 if os.path.exists(PRETRAINED_PATH):
     checkpoint = torch.load(PRETRAINED_PATH, map_location="cpu")
     state = checkpoint.get("model_state_dict", checkpoint)
-    state = {
-        k: v for k, v in state.items()
-        if "rope.cos_cached" not in k and "rope.sin_cached" not in k and "lm_head" not in k
-    }
-    model.load_state_dict(state, strict=False)
-    model.lm_head.weight = model.model.token_emb.weight  # re-tie after load
+    # Separate the embedding weights (size mismatch due to new tokens) from the rest.
+    skip = {"rope.cos_cached", "rope.sin_cached", "lm_head", "token_emb"}
+    compatible_state = {k: v for k, v in state.items() if not any(s in k for s in skip)}
+    emb_key = next((k for k in state if "token_emb.weight" in k), None)
+
+    model.load_state_dict(compatible_state, strict=False)
+
+    # Manually load pretrained embeddings into the larger embedding table,
+    # then initialize the new chat token rows to the mean.
+    if emb_key is not None:
+        pretrained_emb = state[emb_key]
+        n_pretrained = pretrained_emb.shape[0]
+        with torch.no_grad():
+            model.model.token_emb.weight[:n_pretrained] = pretrained_emb
+            mean_emb = pretrained_emb.mean(dim=0)
+            model.model.token_emb.weight[n_pretrained:] = mean_emb
+
+    # Re-tie lm_head to token_emb
+    model.lm_head.weight = model.model.token_emb.weight
+
     print(f"[{now()}] Pretrained checkpoint loaded from {PRETRAINED_PATH}")
     pretrained_loss = checkpoint.get("val_loss", "N/A")
     pretrained_step = checkpoint.get("global_step", "N/A")
     print(f"   Pretrained val_loss={pretrained_loss} at step {pretrained_step}")
+    if new_vocab_size > original_vocab_size:
+        print(f"   Embeddings: {original_vocab_size} pretrained + {new_vocab_size - original_vocab_size} new chat tokens")
 else:
     print(f"⚠️  No pretrained checkpoint at {PRETRAINED_PATH} — training from scratch!")
-
-# Initialize the new chat token embeddings to the mean of pretrained embeddings.
-# The model was created with new_vocab_size, so the embedding layer already has
-# the right size. The pretrained weights only cover original_vocab_size rows;
-# load_state_dict(strict=False) left the new rows at their random init.
-if new_vocab_size > original_vocab_size:
-    with torch.no_grad():
-        mean_emb = model.model.token_emb.weight[:original_vocab_size].mean(dim=0)
-        model.model.token_emb.weight[original_vocab_size:] = mean_emb
-    print(f"[{now()}] New token embeddings initialized ({original_vocab_size} → {new_vocab_size})")
 
 # Sanity check: verify token IDs are within vocab range
 sample_ids = train_ds[0][0]
