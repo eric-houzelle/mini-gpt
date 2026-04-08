@@ -128,6 +128,7 @@ def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=150, 
     idx = tokenizer.encode(prompt, return_tensors="pt").to(device)
     block_size = model_config.block_size
     gen_tokens = []
+    printed_so_far = ""
 
     if debug:
         print(f"\n[DEBUG] Prompt ({idx.shape[-1]} tokens): {repr(prompt[:200])}")
@@ -167,8 +168,11 @@ def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=150, 
         gen_tokens.append(token_id)
 
         if stream:
-            word = tokenizer.decode([token_id], skip_special_tokens=True)
-            print(word, end="", flush=True)
+            decoded_so_far = tokenizer.decode(gen_tokens, skip_special_tokens=True)
+            new_text = decoded_so_far[len(printed_so_far):]
+            if new_text:
+                print(new_text, end="", flush=True)
+                printed_so_far = decoded_so_far
 
     response = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
     return response
