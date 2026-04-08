@@ -101,30 +101,51 @@ print(f"End token: '{end_tag}' → id={end_token_id}")
 
 
 # ---------------------------------------------------------------------------
-# Generation
+# Generation — manual loop to avoid the while-resample trap in model.generate
 # ---------------------------------------------------------------------------
 @torch.no_grad()
-def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=150):
+def generate_response(user_msg, temperature=0.7, top_p=0.9, max_new_tokens=150, stream=False):
     text = format_chat(user_msg, "", None)
     if text.endswith(end_tag):
         text = text[: -len(end_tag)]
 
-    input_ids = tokenizer.encode(text, return_tensors="pt").to(device)
+    idx = tokenizer.encode(text, return_tensors="pt").to(device)
     block_size = model_config.block_size
+    gen_tokens = []
 
-    with torch.amp.autocast("cuda", enabled=torch.cuda.is_available()):
-        output = model.generate(
-            input_ids,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=50,
-            eos_token_id=end_token_id,
-            min_new_tokens=3,
-        )
+    for step in range(max_new_tokens):
+        idx_cond = idx[:, -block_size:]
 
-    gen_tokens = output[0][input_ids.shape[-1]:]
-    response = tokenizer.decode(gen_tokens.tolist(), skip_special_tokens=True).strip()
+        with torch.amp.autocast("cuda", enabled=torch.cuda.is_available()):
+            logits = model(idx_cond).logits[:, -1, :]
+
+        if temperature != 1.0:
+            logits = logits / temperature
+
+        if top_p is not None:
+            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+            cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+            mask = cumulative_probs > top_p
+            mask[..., 1:] = mask[..., :-1].clone()
+            mask[..., 0] = False
+            indices_to_remove = mask.scatter(1, sorted_indices, mask)
+            logits[indices_to_remove] = -float("inf")
+
+        probs = F.softmax(logits, dim=-1)
+        next_token = torch.multinomial(probs, num_samples=1)
+        token_id = next_token.item()
+
+        if token_id == end_token_id:
+            break
+
+        idx = torch.cat((idx, next_token), dim=1)
+        gen_tokens.append(token_id)
+
+        if stream:
+            word = tokenizer.decode([token_id], skip_special_tokens=True)
+            print(word, end="", flush=True)
+
+    response = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
     return response
 
 
@@ -165,5 +186,6 @@ if __name__ == "__main__":
             temperature=args.temperature,
             top_p=args.top_p,
             max_new_tokens=args.max_tokens,
+            stream=True,
         )
-        print(f"{response}\n")
+        print("\n")
