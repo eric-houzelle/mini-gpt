@@ -418,7 +418,7 @@ class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
-    def tie_weights(self):
+    def tie_weights(self, **kwargs):
         self.lm_head.weight = self.model.token_emb.weight
 
     def forward(self, input_ids=None, attention_mask=None, labels=None,
