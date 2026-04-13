@@ -447,17 +447,18 @@ total_steps = num_epochs * len(train_loader)
 
 scheduler = warmup_then_cosine(optimizer, warmup_steps=warmup, total_steps=total_steps)
 
-if scheduler_state_dict is not None:
-    scheduler.load_state_dict(scheduler_state_dict)
-
-# Option d'override du LR lors d'une reprise : on garde l'état optimizer/scheduler
-# mais on force la nouvelle base de LR pour tous les param_groups et le scheduler.
 if override_lr is not None:
+    # When overriding LR, discard the old scheduler state entirely so the
+    # cosine decay restarts cleanly from global_step with the new base LR.
     override_lr = float(override_lr)
     for pg in optimizer.param_groups:
         pg["lr"] = override_lr
     scheduler.base_lrs = [override_lr] * len(optimizer.param_groups)
-    print(f"🔧 Override LR actif -> nouveau LR de base: {override_lr}")
+    scheduler.last_epoch = global_step
+    scheduler._step_count = global_step + 1
+    print(f"🔧 Override LR actif -> nouveau LR de base: {override_lr} (scheduler reset at step {global_step})")
+elif scheduler_state_dict is not None:
+    scheduler.load_state_dict(scheduler_state_dict)
 
 trackio.init(
     project="mini-gpt-1511-v5",

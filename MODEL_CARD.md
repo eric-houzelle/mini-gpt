@@ -148,7 +148,7 @@ Le modèle pré-entraîné a ensuite été fine-tuné sur des données conversat
 |:---------------|:-------|
 | Dataset | [angeluriot/french_instruct](https://huggingface.co/datasets/angeluriot/french_instruct) |
 | Conversations | ~275 000 |
-| Epochs | 3 |
+| Epochs | 10 |
 | Learning rate | 2e-5 |
 | Batch size effectif | 128 (32 × 4 gradient accumulation) |
 | Max grad norm | 1.0 |
@@ -156,12 +156,28 @@ Le modèle pré-entraîné a ensuite été fine-tuné sur des données conversat
 
 ---
 
+## À quoi s'attendre
+
+Klovis est un **projet éducatif et expérimental**. Avec 144M de paramètres, il est capable de :
+
+- ✅ Générer du texte français grammaticalement correct
+- ✅ Suivre le format conversationnel ChatML
+- ✅ Produire des réponses cohérentes sur des sujets simples
+
+Mais il a des limites claires :
+
+- ❌ Les réponses factuelles sont souvent **incorrectes ou inventées** (hallucinations)
+- ❌ Le raisonnement logique est limité
+- ❌ Les réponses peuvent être répétitives ou hors sujet
+
+> **Ce modèle est avant tout une démonstration de ce qu'on peut construire from scratch avec une architecture moderne à petite échelle.** Il n'est pas destiné à remplacer des modèles plus grands pour des usages en production.
+
 ## Limitations
 
-- **Modèle compact** (144M paramètres) — conçu comme un modèle de recherche et d'expérimentation, pas comme un remplacement des grands LLMs.
+- **Modèle compact** (144M paramètres) — les connaissances factuelles sont limitées et souvent incorrectes.
 - **Contexte limité** à 256 tokens.
 - **Français uniquement** — les performances sur d'autres langues ne sont pas garanties.
-- **Peut générer du contenu incorrect, biaisé ou incohérent**, comme tout modèle de langage.
+- **Hallucinations fréquentes** — le modèle invente des faits avec assurance.
 - Non conçu pour des applications critiques ou de production sans supervision humaine.
 
 ## Licence
