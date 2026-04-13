@@ -448,15 +448,15 @@ total_steps = num_epochs * len(train_loader)
 scheduler = warmup_then_cosine(optimizer, warmup_steps=warmup, total_steps=total_steps)
 
 if override_lr is not None:
-    # When overriding LR, discard the old scheduler state entirely so the
-    # cosine decay restarts cleanly from global_step with the new base LR.
+    # When overriding LR, rebuild the scheduler so the cosine decay runs
+    # from global_step to total_steps with the new base LR.
     override_lr = float(override_lr)
     for pg in optimizer.param_groups:
         pg["lr"] = override_lr
-    scheduler.base_lrs = [override_lr] * len(optimizer.param_groups)
-    scheduler.last_epoch = global_step
-    scheduler._step_count = global_step + 1
-    print(f"🔧 Override LR actif -> nouveau LR de base: {override_lr} (scheduler reset at step {global_step})")
+        pg["initial_lr"] = override_lr
+    remaining_steps = total_steps - global_step
+    scheduler = warmup_then_cosine(optimizer, warmup_steps=0, total_steps=remaining_steps)
+    print(f"🔧 Override LR actif -> LR={override_lr}, cosine sur {remaining_steps} steps restants")
 elif scheduler_state_dict is not None:
     scheduler.load_state_dict(scheduler_state_dict)
 
