@@ -466,7 +466,6 @@ class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
 
 def _write_model_card(output_dir: Path, config: MiniGPTConfig, total_params: int, args):
     """Génère une model card README.md complète."""
-    params_m = total_params / 1_000_000
     card = f"""---
 language:
   - fr
@@ -478,119 +477,164 @@ tags:
   - causal-lm
   - sft
   - chatml
+  - from-scratch
+  - transformer
 library_name: transformers
 pipeline_tag: text-generation
 model-index:
-  - name: MiniGPT-FR-SFT
+  - name: Klovis-144M-french-130426
     results: []
 ---
 
-# MiniGPT-FR-SFT
+# Klovis-144M-french-130426
 
-**Modèle de langage français léger** ({params_m:.0f}M paramètres), entraîné from scratch puis fine-tuné par SFT (Supervised Fine-Tuning) sur des données conversationnelles françaises.
+Un modèle de langage **100% français** de **144M de paramètres**, entraîné entièrement from scratch — du pré-entraînement au fine-tuning conversationnel (SFT).
 
-## Caractéristiques
+Klovis est un décodeur Transformer compact conçu pour la génération de texte en français. Il utilise les mêmes briques architecturales que les LLMs modernes (RoPE, RMSNorm, SwiGLU, GQA) dans un format léger et accessible.
 
-| Propriété | Valeur |
-|-----------|--------|
-| Paramètres | **{params_m:.0f}M** |
-| Architecture | Transformer decoder-only |
-| Embedding dim | {config.embed_dim} |
-| Couches | {config.depth} |
-| Têtes d'attention | {config.heads} (GQA: {config.num_kv_heads} KV heads) |
-| FFN hidden dim | {config.hidden_dim} |
-| Context length | {config.block_size} tokens |
-| Position encoding | RoPE (Rotary Position Embedding) |
-| Normalisation | RMSNorm |
-| FFN | SwiGLU |
-| Tokenizer | CamemBERT (camembert-base) |
-| Langue | Français |
+## Caractéristiques principales
 
-## Utilisation rapide
+| | |
+|---|---|
+| **Paramètres** | 144M |
+| **Architecture** | Transformer decoder-only |
+| **Langue** | Français |
+| **Tokenizer** | CamemBERT (`camembert-base`) |
+| **Contexte** | {config.block_size} tokens |
+| **Format de chat** | ChatML |
+| **Licence** | Apache 2.0 |
+
+## Démarrage rapide
+
+### Installation
+
+```bash
+pip install transformers torch safetensors sentencepiece
+```
+
+### Génération de texte
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-model_name = "VOTRE_USERNAME/minigpt-fr-sft"  # À remplacer
+model_id = "Klovis-ai/Klovis-144M-french-130426"
 
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)
 
-# Génération simple
-prompt = "Bonjour, comment ça va ?"
+prompt = "La France est un pays"
 inputs = tokenizer(prompt, return_tensors="pt")
-outputs = model.generate(inputs["input_ids"], max_new_tokens=100)
+outputs = model.generate(inputs["input_ids"], max_new_tokens=100, temperature=0.7, top_p=0.9)
 print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 ```
 
-## Format de conversation (ChatML)
+### Mode conversationnel (ChatML)
 
-Le modèle a été fine-tuné avec le format ChatML. Pour de meilleurs résultats en mode conversationnel :
+Le modèle a été fine-tuné avec le format ChatML pour les interactions en mode assistant :
 
 ```python
-prompt = \"\"\"<|system|>
-Tu es un assistant utile et concis. Réponds en français.<|end|>
-<|user|>
-Quelle est la capitale de la France ?<|end|>
-<|assistant|>
-\"\"\"
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model_id = "Klovis-ai/Klovis-144M-french-130426"
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True)
+
+prompt = (
+    "<|system|>\\n"
+    "Tu es un assistant utile et concis. Réponds en français.<|end|>\\n"
+    "<|user|>\\n"
+    "Quelle est la capitale de la France ?<|end|>\\n"
+    "<|assistant|>\\n"
+)
 
 inputs = tokenizer(prompt, return_tensors="pt")
-outputs = model.generate(inputs["input_ids"], max_new_tokens=150)
-response = tokenizer.decode(outputs[0], skip_special_tokens=False)
-print(response)
+outputs = model.generate(
+    inputs["input_ids"],
+    max_new_tokens=150,
+    temperature=0.7,
+    top_p=0.9,
+    do_sample=True,
+)
+print(tokenizer.decode(outputs[0], skip_special_tokens=False))
 ```
 
 ### Tokens spéciaux
 
 | Token | Rôle |
-|-------|------|
+|:------|:-----|
 | `<\\|system\\|>` | Début du message système |
 | `<\\|user\\|>` | Début du message utilisateur |
 | `<\\|assistant\\|>` | Début de la réponse de l'assistant |
 | `<\\|end\\|>` | Fin d'un tour de parole |
 
-## Entraînement
-
-### Pré-entraînement
-- Données : ~50M textes français
-- Epochs : 25
-- Batch size : 128
-- Learning rate : 1.2e-3
-- Warmup : 5000 steps
-- Optimiseur : AdamW (betas=0.9/0.95, weight decay=0.1)
-- Scheduler : warmup + cosine decay
-- Précision mixte (AMP)
-- Block size progressif : 128 → 256 tokens
-- Pré-tokenisation activée
-
-### Fine-tuning SFT
-- Dataset : [angeluriot/french_instruct](https://huggingface.co/datasets/angeluriot/french_instruct) (~275K conversations)
-- Learning rate : 2e-5
-- Epochs : 3
-- Batch size effectif : 32 × 4 = 128 (gradient accumulation)
-- Max grad norm : 1.0
-- Loss uniquement sur les tokens de l'assistant (prompt masqué)
+---
 
 ## Architecture
 
-Le modèle utilise une architecture Transformer decoder-only moderne avec :
-- **RoPE** (Rotary Position Embeddings) pour l'encodage positionnel
-- **RMSNorm** (pré-normalisation) au lieu de LayerNorm
-- **SwiGLU** comme fonction d'activation dans le FFN
-- **Grouped-Query Attention** (GQA) avec {config.num_kv_heads} KV heads pour {config.heads} query heads
-- **Weight tying** entre les embeddings d'entrée et la tête de sortie
+Klovis reprend les composants des LLMs modernes dans un format compact :
+
+| Composant | Détail |
+|:----------|:-------|
+| Embedding dim | {config.embed_dim} |
+| Couches Transformer | {config.depth} |
+| Têtes d'attention (Q) | {config.heads} |
+| Têtes KV (GQA) | {config.num_kv_heads} |
+| FFN hidden dim | {config.hidden_dim} |
+| Activation FFN | SwiGLU |
+| Normalisation | RMSNorm (pré-norm) |
+| Position encoding | RoPE (Rotary Position Embedding) |
+| Weight tying | Embeddings d'entrée ↔ tête de sortie |
+
+**Grouped-Query Attention (GQA)** : {config.heads} query heads partagent {config.num_kv_heads} KV heads, réduisant l'empreinte mémoire du KV cache tout en maintenant la capacité d'attention.
+
+---
+
+## Entraînement
+
+### Phase 1 — Pré-entraînement
+
+Le modèle a été pré-entraîné from scratch sur un large corpus de textes français.
+
+| Hyperparamètre | Valeur |
+|:---------------|:-------|
+| Données | ~50M textes français |
+| Epochs | 25 |
+| Batch size | 128 |
+| Learning rate | 1.2e-3 |
+| Warmup | 5 000 steps |
+| Optimiseur | AdamW (β₁=0.9, β₂=0.95, wd=0.1) |
+| Scheduler | Warmup linéaire → cosine decay |
+| Précision | Mixed precision (AMP) |
+| Block size | Progressif : 128 → 256 tokens |
+| Label smoothing | 0.02 |
+
+### Phase 2 — Fine-tuning SFT
+
+Le modèle pré-entraîné a ensuite été fine-tuné sur des données conversationnelles françaises avec masquage du prompt (seuls les tokens de l'assistant contribuent à la loss).
+
+| Hyperparamètre | Valeur |
+|:---------------|:-------|
+| Dataset | [angeluriot/french_instruct](https://huggingface.co/datasets/angeluriot/french_instruct) |
+| Conversations | ~275 000 |
+| Epochs | 3 |
+| Learning rate | 2e-5 |
+| Batch size effectif | 128 (32 × 4 gradient accumulation) |
+| Max grad norm | 1.0 |
+| Format | ChatML |
+
+---
 
 ## Limitations
 
-- Modèle de petite taille ({params_m:.0f}M params) — ne rivalisera pas avec les grands LLMs
-- Contexte limité à {config.block_size} tokens
-- Entraîné principalement sur du français
-- Peut générer du contenu incorrect ou biaisé
+- **Modèle compact** (144M paramètres) — conçu comme un modèle de recherche et d'expérimentation, pas comme un remplacement des grands LLMs.
+- **Contexte limité** à {config.block_size} tokens.
+- **Français uniquement** — les performances sur d'autres langues ne sont pas garanties.
+- **Peut générer du contenu incorrect, biaisé ou incohérent**, comme tout modèle de langage.
+- Non conçu pour des applications critiques ou de production sans supervision humaine.
 
 ## Licence
 
-Apache 2.0
+Ce modèle est distribué sous licence [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0).
 """
     with open(output_dir / "README.md", "w", encoding="utf-8") as f:
         f.write(card)
