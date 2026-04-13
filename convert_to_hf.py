@@ -106,7 +106,10 @@ def main():
 
     # ── 5. Sauvegarder en safetensors ───────────────────────────────────
     print("💾 Sauvegarde du modèle (safetensors)...")
-    model.save_pretrained(output_dir, safe_serialization=True)
+    # Sauvegarder manuellement pour éviter les bugs de tied weights dans transformers v5+
+    save_state = {k: v for k, v in model.state_dict().items() if k != "lm_head.weight"}
+    save_file(save_state, output_dir / "model.safetensors")
+    model.config.save_pretrained(output_dir)
 
     # ── 6. Sauvegarder le tokenizer ─────────────────────────────────────
     print("💾 Sauvegarde du tokenizer...")
@@ -144,8 +147,8 @@ def main():
     config_json["architectures"] = ["MiniGPTForCausalLM"]
     config_json["tokenizer_class"] = "CamembertTokenizer"
 
-    # Infos utiles pour la model card
     config_json["torch_dtype"] = "float32"
+    config_json["tie_word_embeddings"] = True
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config_json, f, indent=2, ensure_ascii=False)
