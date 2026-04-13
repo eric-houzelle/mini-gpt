@@ -85,15 +85,18 @@ def main():
     checkpoint = torch.load(args.checkpoint, map_location="cpu")
     state_dict = checkpoint.get("model_state_dict", checkpoint)
 
-    # Filtrer les buffers RoPE cached (recalculés automatiquement)
+    # Filtrer les buffers RoPE (recalculés automatiquement, non-persistent)
+    rope_keys = {"rope.cos_cached", "rope.sin_cached", "rope.inv_freq"}
     state_dict = {k: v for k, v in state_dict.items()
-                  if "rope.cos_cached" not in k and "rope.sin_cached" not in k}
+                  if not any(rk in k for rk in rope_keys)}
 
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
-    model.lm_head.weight = model.model.token_emb.weight
+    model.tie_weights()
 
-    if missing:
-        print(f"   ⚠️  Clés manquantes: {missing[:5]}{'...' if len(missing) > 5 else ''}")
+    # Les seules clés "manquantes" attendues sont les buffers RoPE non-persistent
+    real_missing = [k for k in missing if not any(rk in k for rk in rope_keys)]
+    if real_missing:
+        print(f"   ⚠️  Clés manquantes: {real_missing[:5]}{'...' if len(real_missing) > 5 else ''}")
     if unexpected:
         print(f"   ⚠️  Clés inattendues: {unexpected[:5]}{'...' if len(unexpected) > 5 else ''}")
 
@@ -181,7 +184,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast, BaseModelOutputWithPast
 from .configuration_minigpt import MiniGPTConfig
 
@@ -191,12 +194,15 @@ class RoPEEmbedding(nn.Module):
     def __init__(self, dim, max_seq_len=2048, base=10000):
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer("inv_freq", inv_freq)
-        t = torch.arange(max_seq_len).type_as(self.inv_freq)
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self._rebuild_cache(max_seq_len)
+
+    def _rebuild_cache(self, max_seq_len):
+        t = torch.arange(max_seq_len, device=self.inv_freq.device).type_as(self.inv_freq)
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos()[None, None, :, :])
-        self.register_buffer("sin_cached", emb.sin()[None, None, :, :])
+        self.register_buffer("cos_cached", emb.cos()[None, None, :, :], persistent=False)
+        self.register_buffer("sin_cached", emb.sin()[None, None, :, :], persistent=False)
 
     @staticmethod
     def _rotate_half(x):
@@ -388,16 +394,16 @@ class MiniGPTModel(nn.Module):
         )
 
 
-class MiniGPTForCausalLM(PreTrainedModel):
+class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
     """MiniGPT with a causal language modeling head."""
     config_class = MiniGPTConfig
     base_model_prefix = "model"
+    _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
         super().__init__(config)
         self.model = MiniGPTModel(config)
         self.lm_head = nn.Linear(config.embed_dim, config.vocab_size, bias=False)
-        self.lm_head.weight = self.model.token_emb.weight
         self.post_init()
 
     def get_input_embeddings(self):
@@ -405,13 +411,15 @@ class MiniGPTForCausalLM(PreTrainedModel):
 
     def set_input_embeddings(self, value):
         self.model.set_input_embeddings(value)
-        self.lm_head.weight = self.model.token_emb.weight
 
     def get_output_embeddings(self):
         return self.lm_head
 
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
+
+    def tie_weights(self):
+        self.lm_head.weight = self.model.token_emb.weight
 
     def forward(self, input_ids=None, attention_mask=None, labels=None,
                 past_key_values=None, use_cache=None, output_attentions=None,

@@ -23,16 +23,14 @@ class RoPEEmbedding(nn.Module):
         self.max_seq_len = max_seq_len
         self.base = base
         
-        # Précalculer les fréquences
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer("inv_freq", inv_freq)
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
         
-        # Précalculer cos et sin pour toutes les positions
         t = torch.arange(max_seq_len).type_as(self.inv_freq)
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos()[None, None, :, :])
-        self.register_buffer("sin_cached", emb.sin()[None, None, :, :])
+        self.register_buffer("cos_cached", emb.cos()[None, None, :, :], persistent=False)
+        self.register_buffer("sin_cached", emb.sin()[None, None, :, :], persistent=False)
     
     def rotate_half(self, x):
         """Rotation de moitié des dimensions."""

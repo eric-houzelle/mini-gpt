@@ -9,61 +9,43 @@ MiniGPTForCausalLM hérite de MiniGPTModel et ajoute uniquement la tête de lang
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from .configuration import MiniGPTConfig
 from .modeling_minigpt_core import MiniGPTModel
 
 
 
-class MiniGPTForCausalLM(PreTrainedModel):
+class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
     """
     MiniGPT model avec une tête de langage pour la génération de texte.
     
     Cette classe est compatible avec l'écosystème Hugging Face et peut être
     utilisée avec AutoModelForCausalLM une fois enregistrée.
-    
-    Elle contient :
-    - L'enrobage Hugging Face (méthodes standard)
-    - La logique LM (tête de prédiction)
-    - L'appel au modèle interne (MiniGPTModel)
     """
     config_class = MiniGPTConfig
     base_model_prefix = "model"
+    _tied_weights_keys = ["lm_head.weight"]
     
     def __init__(self, config):
         super().__init__(config)
-        
-        # Modèle core (architecture sans la tête)
         self.model = MiniGPTModel(config)
-        
-        # Tête de langage (prédiction de tokens)
         self.lm_head = nn.Linear(config.embed_dim, config.vocab_size, bias=False)
-        
-        # Weight tying : partager les poids entre token_emb et lm_head
-        self.lm_head.weight = self.model.token_emb.weight
-        
-        # Post-initialisation
         self.post_init()
 
     def get_input_embeddings(self):
-        """Retourne les embeddings d'entrée."""
         return self.model.get_input_embeddings()
 
     def set_input_embeddings(self, value):
-        """Définit les embeddings d'entrée."""
         self.model.set_input_embeddings(value)
-        # Mettre à jour le weight tying
-        self.lm_head.weight = self.model.token_emb.weight
 
     def get_output_embeddings(self):
-        """Retourne la tête de sortie."""
         return self.lm_head
 
     def set_output_embeddings(self, new_embeddings):
-        """Définit la tête de sortie."""
         self.lm_head = new_embeddings
-        # Mettre à jour le weight tying
+
+    def tie_weights(self):
         self.lm_head.weight = self.model.token_emb.weight
 
     def forward(
