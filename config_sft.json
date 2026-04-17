@@ -1,6 +1,6 @@
 {
   "training": {
-    "num_epochs": 5,
+    "num_epochs": 3,
     "batch_size": 32,
     "learning_rate": 2e-5,
     "warmup": 200,
@@ -34,22 +34,24 @@
       "format": "alpaca"
     },
     {
-      "name": "Houzeric/french-prompts-and-questions",
-      "format": "flat",
-      "user_key": "prompt",
-      "assistant_key": "answer"
-    },
-    {
       "name": "Houzeric/everyday-conversations",
       "format": "flat",
       "user_key": "user",
       "assistant_key": "assistant"
     },
     {
+      "name": "Houzeric/french-prompts-and-questions",
+      "format": "flat",
+      "user_key": "prompt",
+      "assistant_key": "answer",
+      "max_texts": 30000
+    },
+    {
       "name": "Houzeric/physics-FR-qa-dataset",
       "format": "flat",
       "user_key": "question",
-      "assistant_key": "answer"
+      "assistant_key": "answer",
+      "max_texts": 30000
     }
   ]
 }
