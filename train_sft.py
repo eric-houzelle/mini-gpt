@@ -39,12 +39,6 @@ with open(CONFIG_PATH, "r") as f:
 PRETRAINED_PATH = os.getenv("PRETRAINED_PATH", "checkpoints/best_miniGPT.pt")
 SFT_SAVE_PATH = os.getenv("SFT_SAVE_PATH", "checkpoints/best_miniGPT_sft.pt")
 TOKENIZER_NAME = os.getenv("TOKENIZER_NAME", "camembert-base")
-DATASET_NAME = os.getenv("SFT_DATASET_NAME", "BAAI/Infinity-Instruct")
-DATASET_SUBSET = os.getenv("SFT_DATASET_SUBSET")
-USER_KEY = os.getenv("SFT_USER_KEY", "user")
-ASSISTANT_KEY = os.getenv("SFT_ASSISTANT_KEY", "assistant")
-CONVERSATIONS_KEY = os.getenv("SFT_CONVERSATIONS_KEY")
-LANGUAGE_FILTER = os.getenv("SFT_LANGUAGE_FILTER")
 EVAL_EVERY_STEPS = int(os.getenv("EVAL_EVERY_STEPS", "500"))
 
 num_epochs = config["training"]["num_epochs"]
@@ -65,8 +59,9 @@ weight_sharing = config["model"].get("weight_sharing", "none")
 use_rope = config["model"].get("use_rope", True)
 use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", False)
 
-max_texts = config["data"]["max_texts"]
+max_texts_per_ds = config["data"].get("max_texts_per_dataset", config["data"].get("max_texts", 200000))
 train_split_ratio = config["data"]["train_split_ratio"]
+dataset_configs = config.get("datasets", [])
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -103,59 +98,109 @@ print(f"   Vocab: {original_vocab_size} → {new_vocab_size} (len={len(tokenizer
 
 
 # ---------------------------------------------------------------------------
-# Dataset loading
+# Dataset loading  (multi-dataset)
 # ---------------------------------------------------------------------------
-def load_conversations():
-    """Load and normalize conversations from the configured dataset.
 
-    Supports two common HF dataset layouts:
-      1. Flat: each row has a 'user' column and an 'assistant' column.
-      2. Nested: each row has a 'conversations' list of {role, content} dicts
-         (OpenAI / ShareGPT style).
-    """
-    print(f"[{now()}] Loading SFT dataset: {DATASET_NAME}")
+def _parse_conversations_format(ds, conv_key, count):
+    """Parse datasets with a nested conversations list (ShareGPT / OpenAI style)."""
+    pairs = []
+    for i in range(count):
+        turns = ds[i][conv_key]
+        if not turns or not isinstance(turns, list):
+            continue
+        user_msg, assistant_msg = None, None
+        for turn in turns:
+            role = turn.get("role", turn.get("from", ""))
+            content = turn.get("content", turn.get("text", turn.get("value", "")))
+            if role in ("user", "human") and user_msg is None:
+                user_msg = content
+            elif role in ("assistant", "gpt") and assistant_msg is None:
+                assistant_msg = content
+            if user_msg and assistant_msg:
+                break
+        if user_msg and assistant_msg:
+            pairs.append({"user": user_msg, "assistant": assistant_msg})
+    return pairs
 
-    if DATASET_SUBSET:
-        ds = load_dataset(DATASET_NAME, DATASET_SUBSET, split="train")
+
+def _parse_alpaca_format(ds, count):
+    """Parse Alpaca-style datasets (instruction / input / output)."""
+    pairs = []
+    for i in range(count):
+        row = ds[i]
+        instruction = row.get("instruction", "")
+        inp = row.get("input", "")
+        output = row.get("output", "")
+        if not instruction or not output:
+            continue
+        user_msg = f"{instruction}\n{inp}".strip() if inp else instruction
+        pairs.append({"user": user_msg, "assistant": output})
+    return pairs
+
+
+def _parse_flat_format(ds, user_key, assistant_key, count):
+    """Parse flat datasets with explicit user / assistant columns."""
+    pairs = []
+    for i in range(count):
+        row = ds[i]
+        u = row.get(user_key, "")
+        a = row.get(assistant_key, "")
+        if u and a:
+            pairs.append({"user": str(u), "assistant": str(a)})
+    return pairs
+
+
+def load_single_dataset(ds_cfg):
+    """Load one dataset entry from the config and return (user, assistant) pairs."""
+    name = ds_cfg["name"]
+    subset = ds_cfg.get("subset")
+    fmt = ds_cfg.get("format", "flat")
+    lang = ds_cfg.get("language_filter")
+    max_n = ds_cfg.get("max_texts", max_texts_per_ds)
+
+    print(f"[{now()}]  → Loading {name}" + (f" [{subset}]" if subset else ""))
+
+    if subset:
+        ds = load_dataset(name, subset, split="train")
     else:
-        ds = load_dataset(DATASET_NAME, split="train")
+        ds = load_dataset(name, split="train")
 
-    if LANGUAGE_FILTER:
+    if lang:
         lang_col = "language" if "language" in ds.column_names else "lang"
         if lang_col in ds.column_names:
-            ds = ds.filter(lambda x: x[lang_col] == LANGUAGE_FILTER)
-            print(f"   Filtered to language='{LANGUAGE_FILTER}': {len(ds)} rows")
+            ds = ds.filter(lambda x: x[lang_col] == lang)
+            print(f"     Filtered to language='{lang}': {len(ds)} rows")
 
-    conversations = []
-    count = min(max_texts, len(ds))
+    count = min(max_n, len(ds))
 
-    if CONVERSATIONS_KEY and CONVERSATIONS_KEY in ds.column_names:
-        for i in range(count):
-            turns = ds[i][CONVERSATIONS_KEY]
-            if not turns or not isinstance(turns, list):
-                continue
-            user_msg, assistant_msg = None, None
-            for turn in turns:
-                role = turn.get("role", turn.get("from", ""))
-                content = turn.get("content", turn.get("text", turn.get("value", "")))
-                if role in ("user", "human") and user_msg is None:
-                    user_msg = content
-                elif role in ("assistant", "gpt") and assistant_msg is None:
-                    assistant_msg = content
-                if user_msg and assistant_msg:
-                    break
-            if user_msg and assistant_msg:
-                conversations.append({"user": user_msg, "assistant": assistant_msg})
+    if fmt == "conversations":
+        conv_key = ds_cfg.get("conversations_key", "conversations")
+        pairs = _parse_conversations_format(ds, conv_key, count)
+    elif fmt == "alpaca":
+        pairs = _parse_alpaca_format(ds, count)
     else:
-        for i in range(count):
-            row = ds[i]
-            u = row.get(USER_KEY, "")
-            a = row.get(ASSISTANT_KEY, "")
-            if u and a:
-                conversations.append({"user": str(u), "assistant": str(a)})
+        user_key = ds_cfg.get("user_key", "user")
+        assistant_key = ds_cfg.get("assistant_key", "assistant")
+        pairs = _parse_flat_format(ds, user_key, assistant_key, count)
 
-    print(f"   Loaded {len(conversations)} conversation pairs")
-    return conversations
+    print(f"     → {len(pairs)} pairs extracted")
+    return pairs
+
+
+def load_conversations():
+    """Load and merge conversations from all configured datasets."""
+    if not dataset_configs:
+        raise ValueError("No datasets configured in config_sft.json['datasets']")
+
+    print(f"[{now()}] Loading {len(dataset_configs)} SFT dataset(s)...")
+    all_pairs = []
+    for ds_cfg in dataset_configs:
+        all_pairs.extend(load_single_dataset(ds_cfg))
+
+    import random
+    random.shuffle(all_pairs)
+    print(f"[{now()}] Total: {len(all_pairs)} conversation pairs (shuffled)")
+    return all_pairs
 
 
 conversations = load_conversations()
