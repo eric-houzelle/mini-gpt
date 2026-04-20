@@ -152,6 +152,11 @@ class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
             if temperature != 1.0:
                 logits = logits / temperature
             
+            # Masquer le EOS tant qu'on n'a pas atteint min_new_tokens
+            # (avant top-k/top-p pour que le filtering porte sur les tokens restants)
+            if eos_token_id is not None and step < min_new_tokens:
+                logits[:, eos_token_id] = -float('Inf')
+
             # Top-k filtering
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
@@ -162,23 +167,19 @@ class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
                 sorted_logits, sorted_indices = torch.sort(logits, descending=True)
                 cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
                 
-                # Retirer les tokens au-delà du seuil top_p
                 sorted_indices_to_remove = cumulative_probs > top_p
-                # Garder au moins le premier token
                 sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
                 sorted_indices_to_remove[..., 0] = 0
                 
-                # Scatter les valeurs -inf
                 indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
                 logits[indices_to_remove] = -float('Inf')
-            
-            # Masquer le EOS tant qu'on n'a pas atteint min_new_tokens
-            if eos_token_id is not None and step < min_new_tokens:
-                logits[:, eos_token_id] = -float('Inf')
 
-            # Échantillonner
+            # Échantillonner avec fallback si tous les logits sont -Inf
             probs = F.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
+            if not torch.isfinite(probs).all() or (probs.sum(dim=-1) <= 0).any():
+                next_token = torch.argmax(logits, dim=-1, keepdim=True)
+            else:
+                next_token = torch.multinomial(probs, num_samples=1)
 
             idx = torch.cat((idx, next_token), dim=1)
 
