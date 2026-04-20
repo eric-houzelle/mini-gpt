@@ -172,14 +172,13 @@ class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
                 indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
                 logits[indices_to_remove] = -float('Inf')
             
+            # Masquer le EOS tant qu'on n'a pas atteint min_new_tokens
+            if eos_token_id is not None and step < min_new_tokens:
+                logits[:, eos_token_id] = -float('Inf')
+
             # Échantillonner
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
-
-            # Éviter un EOS trop tôt
-            if eos_token_id is not None and step < min_new_tokens:
-                while next_token.item() == eos_token_id:
-                    next_token = torch.multinomial(probs, num_samples=1)
 
             idx = torch.cat((idx, next_token), dim=1)
 
