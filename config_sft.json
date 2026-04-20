@@ -25,33 +25,43 @@
   },
   "datasets": [
     {
-      "name": "angeluriot/french_instruct",
-      "format": "conversations",
-      "conversations_key": "conversation"
-    },
-    {
-      "name": "jpacifico/French-Alpaca-dataset-Instruct-55K",
-      "format": "alpaca"
-    },
-    {
       "name": "Houzeric/everyday-conversations",
       "format": "flat",
       "user_key": "user",
       "assistant_key": "assistant"
     },
     {
+      "name": "angeluriot/french_instruct",
+      "format": "conversations",
+      "conversations_key": "conversation",
+      "max_texts": 40000,
+      "filter_column": "source",
+      "exclude_values": [
+        "Logic Inference OA (translated)",
+        "Evol Instruct (translated)",
+        "Human ChatGPT Comparison Corpus (translated)"
+      ]
+    },
+    {
+      "name": "jpacifico/French-Alpaca-dataset-Instruct-55K",
+      "format": "alpaca",
+      "max_texts": 20000
+    },
+    {
       "name": "Houzeric/french-prompts-and-questions",
       "format": "flat",
       "user_key": "prompt",
       "assistant_key": "answer",
-      "max_texts": 30000
+      "max_texts": 15000,
+      "filter_column": "type",
+      "include_values": ["human_chatgpt"]
     },
     {
       "name": "Houzeric/physics-FR-qa-dataset",
       "format": "flat",
       "user_key": "question",
       "assistant_key": "answer",
-      "max_texts": 30000
+      "max_texts": 5000
     }
   ]
 }

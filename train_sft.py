@@ -171,6 +171,20 @@ def load_single_dataset(ds_cfg):
             ds = ds.filter(lambda x: x[lang_col] == lang)
             print(f"     Filtered to language='{lang}': {len(ds)} rows")
 
+    # Include/exclude rows based on a column value (e.g. source, type)
+    include_values = ds_cfg.get("include_values")
+    exclude_values = ds_cfg.get("exclude_values")
+    filter_col = ds_cfg.get("filter_column")
+    if filter_col and filter_col in ds.column_names:
+        if include_values:
+            allowed = {v.lower() for v in include_values}
+            ds = ds.filter(lambda x: str(x[filter_col]).lower() in allowed)
+            print(f"     Include filter on '{filter_col}' ({', '.join(include_values)}): {len(ds)} rows")
+        elif exclude_values:
+            blocked = {v.lower() for v in exclude_values}
+            ds = ds.filter(lambda x: str(x[filter_col]).lower() not in blocked)
+            print(f"     Exclude filter on '{filter_col}' (excl. {', '.join(exclude_values)}): {len(ds)} rows")
+
     count = min(max_n, len(ds))
 
     if fmt == "conversations":
