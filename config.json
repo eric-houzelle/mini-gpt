@@ -46,6 +46,7 @@
       "name": "HuggingFaceFW/fineweb-2",
       "subset": "fra_Latn",
       "text_key": "text",
+      "data_files": "data/fra_Latn/train/000_000*.parquet",
       "max_texts": 13000000
     }
   ]

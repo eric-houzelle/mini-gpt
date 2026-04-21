@@ -92,41 +92,38 @@ tokenizer = load_tokenizer(TOKENIZER_NAME)
 def _load_single_pretrain_dataset(ds_cfg):
     """Load one pretraining dataset and return a list of text strings.
 
-    Automatically uses streaming for large remote datasets to avoid
-    downloading hundreds of GB when only a fraction is needed.
+    Supports "data_files" to download only specific parquet files instead of
+    the entire dataset (critical for huge datasets like fineweb-2).
     """
     name = ds_cfg["name"]
     text_key = ds_cfg.get("text_key", "text")
     subset = ds_cfg.get("subset")
     max_n = ds_cfg.get("max_texts", max_texts_per_ds)
     template = ds_cfg.get("template")
-    use_streaming = ds_cfg.get("streaming", "auto")
+    data_files = ds_cfg.get("data_files")
 
-    is_local = name.endswith('.csv') and os.path.exists(name)
+    label = f"  → Loading {name}"
+    if subset:
+        label += f" [{subset}]"
+    if data_files:
+        label += f" (data_files={data_files})"
+    print(label)
 
-    if use_streaming == "auto":
-        use_streaming = not is_local and max_n >= 100_000
-    else:
-        use_streaming = bool(use_streaming)
-
-    mode_label = " [streaming]" if use_streaming else ""
-    print(f"  → Loading {name}" + (f" [{subset}]" if subset else "") + mode_label)
-
-    filter_col = ds_cfg.get("filter_column")
-    include_values = ds_cfg.get("include_values")
-    exclude_values = ds_cfg.get("exclude_values")
-
-    if use_streaming:
-        return _load_streaming(name, subset, text_key, max_n, template,
-                               filter_col, include_values, exclude_values)
-
-    if is_local:
+    if name.endswith('.csv') and os.path.exists(name):
         ds = load_dataset("csv", data_files=name, split="train")
+    elif data_files:
+        if subset:
+            ds = load_dataset(name, subset, data_files=data_files, split="train")
+        else:
+            ds = load_dataset(name, data_files=data_files, split="train")
     elif subset:
         ds = load_dataset(name, subset, split="train")
     else:
         ds = load_dataset(name, split="train")
 
+    filter_col = ds_cfg.get("filter_column")
+    include_values = ds_cfg.get("include_values")
+    exclude_values = ds_cfg.get("exclude_values")
     if filter_col and filter_col in ds.column_names:
         if include_values:
             allowed = {v.lower() for v in include_values}
@@ -138,6 +135,7 @@ def _load_single_pretrain_dataset(ds_cfg):
             print(f"    Exclude filter on '{filter_col}': {len(ds)} rows")
 
     count = min(max_n, len(ds))
+    print(f"    Dataset loaded: {len(ds)} rows, taking {count}")
 
     if template:
         class _SafeDict(dict):
@@ -154,48 +152,6 @@ def _load_single_pretrain_dataset(ds_cfg):
 
     result = [t for t in result if t and len(t.strip()) > 10]
     print(f"    → {len(result)} texts extracted")
-    return result
-
-
-def _load_streaming(name, subset, text_key, max_n, template,
-                    filter_col, include_values, exclude_values):
-    """Stream a dataset and collect up to max_n texts without full download."""
-    kwargs = {"split": "train", "streaming": True}
-    if subset:
-        ds_iter = load_dataset(name, subset, **kwargs)
-    else:
-        ds_iter = load_dataset(name, **kwargs)
-
-    if filter_col:
-        if include_values:
-            allowed = {v.lower() for v in include_values}
-            ds_iter = ds_iter.filter(lambda x: str(x.get(filter_col, "")).lower() in allowed)
-        elif exclude_values:
-            blocked = {v.lower() for v in exclude_values}
-            ds_iter = ds_iter.filter(lambda x: str(x.get(filter_col, "")).lower() not in blocked)
-
-    result = []
-    log_every = max(max_n // 10, 10_000)
-
-    for i, row in enumerate(ds_iter):
-        if len(result) >= max_n:
-            break
-
-        if template:
-            class _SafeDict(dict):
-                def __missing__(self, key):
-                    return ""
-            text = template.format_map(_SafeDict(row))
-        else:
-            text = row.get(text_key, "")
-
-        if text and len(text.strip()) > 10:
-            result.append(text)
-
-        if (i + 1) % log_every == 0:
-            print(f"    ... streamed {i + 1} rows, kept {len(result)} texts")
-
-    print(f"    → {len(result)} texts extracted (streamed)")
     return result
 
 
