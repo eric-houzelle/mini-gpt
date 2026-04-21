@@ -61,10 +61,12 @@ act_halt_threshold = rdt_config.get("act_halt_threshold", 0.99)
 depth_lora_rank = rdt_config.get("depth_lora_rank", 8)
 act_loss_weight = rdt_config.get("act_loss_weight", 0.01)
 
-max_texts = config["data"]["max_texts"]
+max_texts = config["data"].get("max_texts", config["data"].get("max_texts_per_dataset", 500000))
+max_texts_per_ds = config["data"].get("max_texts_per_dataset", max_texts)
 train_split_ratio = config["data"]["train_split_ratio"]
 use_pretokenize = config["data"].get("pretokenize", True)
 progressive_schedule = config["data"].get("progressive_block_sizes")
+dataset_configs = config.get("datasets", [])
 
 
 def load_tokenizer(tokenizer_name):
@@ -87,53 +89,107 @@ def load_tokenizer(tokenizer_name):
 
 tokenizer = load_tokenizer(TOKENIZER_NAME)
 
-print(f"LOAD DATASET: {DATASET_NAME}")
-# Support pour les fichiers CSV locaux
-csv_path = None
-if DATASET_NAME.endswith('.csv'):
-    # Chemin relatif ou absolu vers un fichier CSV
-    if os.path.exists(DATASET_NAME):
-        csv_path = DATASET_NAME
-    elif os.path.exists(os.path.abspath(DATASET_NAME)):
-        csv_path = os.path.abspath(DATASET_NAME)
+def _load_single_pretrain_dataset(ds_cfg):
+    """Load one pretraining dataset and return a list of text strings."""
+    name = ds_cfg["name"]
+    text_key = ds_cfg.get("text_key", "text")
+    subset = ds_cfg.get("subset")
+    max_n = ds_cfg.get("max_texts", max_texts_per_ds)
+    template = ds_cfg.get("template")
 
-if csv_path:
-    print(f"📁 Loading local CSV file: {csv_path}")
-    dataset = load_dataset("csv", data_files=csv_path)
-    train_split_ds = dataset["train"]
-    print(f"✅ CSV file loaded successfully")
-else:
-    dataset = load_dataset(DATASET_NAME)
-    train_split_ds = dataset["train"]
+    print(f"  → Loading {name}" + (f" [{subset}]" if subset else ""))
 
-if DATASET_FILTER_FIELD and DATASET_FILTER_VALUE:
-    if DATASET_FILTER_FIELD not in train_split_ds.column_names:
-        print(f"⚠️ Warning: Filter field '{DATASET_FILTER_FIELD}' not found. Available columns: {train_split_ds.column_names}")
+    if name.endswith('.csv') and os.path.exists(name):
+        ds = load_dataset("csv", data_files=name, split="train")
+    elif subset:
+        ds = load_dataset(name, subset, split="train")
     else:
-        # Support pour plusieurs termes séparés par des virgules (Logique OR)
-        filter_values = [v.strip().lower() for v in DATASET_FILTER_VALUE.split(",")]
-        print(f"🔍 Filtering dataset: rows where '{DATASET_FILTER_FIELD}' contains ANY of {filter_values}")
-        train_split_ds = train_split_ds.filter(
-            lambda x: any(val in str(x[DATASET_FILTER_FIELD]).lower() for val in filter_values)
-        )
-        print(f"✅ Filtered dataset: {len(train_split_ds)} rows remaining")
+        ds = load_dataset(name, split="train")
+
+    filter_col = ds_cfg.get("filter_column")
+    include_values = ds_cfg.get("include_values")
+    exclude_values = ds_cfg.get("exclude_values")
+    if filter_col and filter_col in ds.column_names:
+        if include_values:
+            allowed = {v.lower() for v in include_values}
+            ds = ds.filter(lambda x: str(x[filter_col]).lower() in allowed)
+            print(f"    Include filter on '{filter_col}': {len(ds)} rows")
+        elif exclude_values:
+            blocked = {v.lower() for v in exclude_values}
+            ds = ds.filter(lambda x: str(x[filter_col]).lower() not in blocked)
+            print(f"    Exclude filter on '{filter_col}': {len(ds)} rows")
+
+    count = min(max_n, len(ds))
+
+    if template:
+        class _SafeDict(dict):
+            def __missing__(self, key):
+                return ""
+        subset_ds = ds.select(range(count))
+        result = [template.format_map(_SafeDict(row)) for row in subset_ds]
+    else:
+        if text_key not in ds.column_names:
+            raise ValueError(
+                f"Column '{text_key}' not found in {name}. Available: {ds.column_names}"
+            )
+        result = ds[text_key][:count]
+
+    result = [t for t in result if t and len(t.strip()) > 10]
+    print(f"    → {len(result)} texts extracted")
+    return result
 
 
-if DATASET_TEMPLATE:
-    class _SafeDict(dict):
-        def __missing__(self, key):
-            return ""
-
-    max_items = min(max_texts, len(train_split_ds))
-    subset = train_split_ds.select(range(max_items))
-    texts = [DATASET_TEMPLATE.format_map(_SafeDict(example)) for example in subset]
-    print("Using DATASET_TEMPLATE to format structured samples")
+if dataset_configs:
+    print(f"Loading {len(dataset_configs)} pretraining dataset(s)...")
+    texts = []
+    for ds_cfg in dataset_configs:
+        texts.extend(_load_single_pretrain_dataset(ds_cfg))
+    import random
+    random.shuffle(texts)
+    print(f"Total: {len(texts)} texts (shuffled)")
 else:
-    if DATASET_KEY not in train_split_ds.column_names:
-        raise ValueError(
-            f"Column '{DATASET_KEY}' not found in dataset. Available columns: {train_split_ds.column_names}"
-        )
-    texts = train_split_ds[DATASET_KEY][:max_texts]
+    print(f"LOAD DATASET: {DATASET_NAME}")
+    csv_path = None
+    if DATASET_NAME.endswith('.csv'):
+        if os.path.exists(DATASET_NAME):
+            csv_path = DATASET_NAME
+        elif os.path.exists(os.path.abspath(DATASET_NAME)):
+            csv_path = os.path.abspath(DATASET_NAME)
+
+    if csv_path:
+        print(f"📁 Loading local CSV file: {csv_path}")
+        dataset = load_dataset("csv", data_files=csv_path)
+        train_split_ds = dataset["train"]
+        print(f"✅ CSV file loaded successfully")
+    else:
+        dataset = load_dataset(DATASET_NAME)
+        train_split_ds = dataset["train"]
+
+    if DATASET_FILTER_FIELD and DATASET_FILTER_VALUE:
+        if DATASET_FILTER_FIELD not in train_split_ds.column_names:
+            print(f"⚠️ Warning: Filter field '{DATASET_FILTER_FIELD}' not found. Available columns: {train_split_ds.column_names}")
+        else:
+            filter_values = [v.strip().lower() for v in DATASET_FILTER_VALUE.split(",")]
+            print(f"🔍 Filtering dataset: rows where '{DATASET_FILTER_FIELD}' contains ANY of {filter_values}")
+            train_split_ds = train_split_ds.filter(
+                lambda x: any(val in str(x[DATASET_FILTER_FIELD]).lower() for val in filter_values)
+            )
+            print(f"✅ Filtered dataset: {len(train_split_ds)} rows remaining")
+
+    if DATASET_TEMPLATE:
+        class _SafeDict(dict):
+            def __missing__(self, key):
+                return ""
+        max_items = min(max_texts, len(train_split_ds))
+        subset = train_split_ds.select(range(max_items))
+        texts = [DATASET_TEMPLATE.format_map(_SafeDict(example)) for example in subset]
+        print("Using DATASET_TEMPLATE to format structured samples")
+    else:
+        if DATASET_KEY not in train_split_ds.column_names:
+            raise ValueError(
+                f"Column '{DATASET_KEY}' not found in dataset. Available columns: {train_split_ds.column_names}"
+            )
+        texts = train_split_ds[DATASET_KEY][:max_texts]
 
 if use_pretokenize:
     print(f"⏳ Pre-tokenizing {len(texts)} texts...")

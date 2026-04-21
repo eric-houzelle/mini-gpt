@@ -22,8 +22,21 @@
   },
   "data": {
     "max_texts": 500000,
+    "max_texts_per_dataset": 500000,
     "train_split_ratio": 0.90,
     "pretokenize": true,
     "progressive_block_sizes": [[0,128], [1000, 256], [2000, 256]]
-  }
+  },
+  "datasets": [
+    {
+      "name": "CATIE-AQ/wikipedia_fr_2022",
+      "text_key": "text"
+    },
+    {
+      "name": "HuggingFaceFW/fineweb-2",
+      "subset": "fra_Latn",
+      "text_key": "text",
+      "max_texts": 13000000
+    }
+  ]
 }
