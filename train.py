@@ -385,11 +385,16 @@ def generate_example_v2(
                     if next_token.item() == eos_id:
                         break
 
+    del past_key_values
     sample = idx[0]
     gen_tokens = sample[prompt_ids.shape[-1]:].tolist()
+    del idx, prompt_ids
 
     gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
     gen_text_raw = tokenizer.decode(gen_tokens, skip_special_tokens=False).strip()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return example_prompt, gen_text, gen_text_raw, gen_tokens
 
@@ -637,6 +642,8 @@ for epoch in range(start_epoch, num_epochs):
 
             # Validation et génération périodiques
             if global_step % EVAL_EVERY_STEPS == 0:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 val_loss = compute_validation_loss(model, val_loader, loss_fn, device)
                 improvement = best_loss - val_loss
                 if best_loss != float("inf"):
@@ -690,5 +697,7 @@ for epoch in range(start_epoch, num_epochs):
                     print(f"[DEBUG] gen_tokens v2 (len={len(gen_tokens)}): {gen_tokens}")
                     print(f"[DEBUG] gen_text_raw v2: {gen_text_raw}")
 
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 model.train()
 trackio.finish()

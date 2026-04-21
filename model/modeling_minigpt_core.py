@@ -104,6 +104,7 @@ class MiniGPTModel(nn.Module):
 
         self.ln_f = RMSNorm(embed_dim)
         self._act_loss = torch.tensor(0.0)
+        self._inference_recurrent_steps = None
 
     # ------------------------------------------------------------------ #
     #  Public API                                                         #
@@ -122,6 +123,24 @@ class MiniGPTModel(nn.Module):
     def act_loss(self) -> torch.Tensor:
         """Ponder cost from ACT — add to training loss as regularisation."""
         return self._act_loss
+
+    def set_inference_recurrent_steps(self, steps: int | None):
+        """Override the number of recurrent steps used at inference time.
+
+        Allows deeper reasoning without retraining. LoRA adapters are
+        reused cyclically for steps beyond the trained count.
+        Set to None to revert to the training default.
+        """
+        self._inference_recurrent_steps = steps
+
+    @property
+    def effective_recurrent_steps(self) -> int:
+        """Number of recurrent steps for the current forward pass."""
+        if self.weight_sharing != "recurrent_depth":
+            return 0
+        if not self.training and self._inference_recurrent_steps is not None:
+            return self._inference_recurrent_steps
+        return self.num_recurrent_steps
 
     # ------------------------------------------------------------------ #
     #  Forward                                                            #
@@ -199,14 +218,17 @@ class MiniGPTModel(nn.Module):
         encoded_input = x  # snapshot for LTI re-injection
 
         # --- Recurrent loop ---
+        n_steps = self.effective_recurrent_steps
         if self.use_act and not self.training:
             x = self._recurrent_loop_act_inference(
                 x, encoded_input, mask, past_key_values, use_cache, new_key_values, kv_idx,
+                n_steps,
             )
-            kv_idx += self.num_recurrent_steps
+            kv_idx += n_steps
         else:
             x, kv_idx = self._recurrent_loop(
                 x, encoded_input, mask, past_key_values, use_cache, new_key_values, kv_idx,
+                n_steps,
             )
 
         # --- Coda ---
@@ -223,12 +245,15 @@ class MiniGPTModel(nn.Module):
 
         return x
 
-    def _recurrent_loop(self, x, encoded_input, mask, past_key_values, use_cache, new_key_values, kv_idx):
+    def _recurrent_loop(self, x, encoded_input, mask, past_key_values, use_cache, new_key_values, kv_idx,
+                         n_steps=None):
         """Standard recurrent loop (training, or eval without ACT).
 
         During training with ACT enabled, we compute halt probabilities and
         accumulate the weighted output + ponder cost for the loss.
         """
+        if n_steps is None:
+            n_steps = self.num_recurrent_steps
         B, T, D = x.shape
         device = x.device
 
@@ -239,7 +264,7 @@ class MiniGPTModel(nn.Module):
             weighted_state = torch.zeros_like(x)
             still_running = torch.ones(B, T, 1, device=device, dtype=torch.bool)
 
-        for t in range(self.num_recurrent_steps):
+        for t in range(n_steps):
             if self.use_gradient_checkpointing and self.training:
                 block_out = checkpoint(
                     self.recurrent_block.forward_checkpointed, x, mask, use_reentrant=False,
@@ -258,9 +283,9 @@ class MiniGPTModel(nn.Module):
             else:
                 x = block_out
 
-            # Depth-wise LoRA
             if self.depth_lora_rank > 0:
-                x = x + self.depth_loras[t](x)
+                lora_idx = t % len(self.depth_loras)
+                x = x + self.depth_loras[lora_idx](x)
 
             # ACT accumulation (training only)
             if use_act_train:
@@ -284,8 +309,11 @@ class MiniGPTModel(nn.Module):
 
     def _recurrent_loop_act_inference(
         self, x, encoded_input, mask, past_key_values, use_cache, new_key_values, kv_idx,
+        n_steps=None,
     ):
         """Recurrent loop with early exit per position at inference time."""
+        if n_steps is None:
+            n_steps = self.num_recurrent_steps
         B, T, D = x.shape
         device = x.device
 
@@ -294,7 +322,7 @@ class MiniGPTModel(nn.Module):
         weighted_state = torch.zeros_like(x)
         still_running = torch.ones(B, T, 1, device=device, dtype=torch.bool)
 
-        for t in range(self.num_recurrent_steps):
+        for t in range(n_steps):
             if not still_running.any():
                 if use_cache:
                     new_key_values.append(None)
@@ -313,7 +341,8 @@ class MiniGPTModel(nn.Module):
                 x = block_out
 
             if self.depth_lora_rank > 0:
-                x = x + self.depth_loras[t](x)
+                lora_idx = t % len(self.depth_loras)
+                x = x + self.depth_loras[lora_idx](x)
 
             p = self.act.compute_halt_prob(x)
             still_running_f = still_running.float()

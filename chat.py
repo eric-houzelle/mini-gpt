@@ -70,6 +70,13 @@ model_config = MiniGPTConfig(
     weight_sharing=model_cfg.get("weight_sharing", "none"),
     use_rope=model_cfg.get("use_rope", True),
     use_gradient_checkpointing=False,
+    num_prelude_layers=model_cfg.get("num_prelude_layers", 2),
+    num_coda_layers=model_cfg.get("num_coda_layers", 2),
+    num_recurrent_steps=model_cfg.get("num_recurrent_steps", 8),
+    use_lti_injection=model_cfg.get("use_lti_injection", False),
+    use_act_halting=model_cfg.get("use_act_halting", False),
+    act_halt_threshold=model_cfg.get("act_halt_threshold", 0.99),
+    depth_lora_rank=model_cfg.get("depth_lora_rank", 0),
 )
 
 model = MiniGPTForCausalLM(model_config)
@@ -186,7 +193,14 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--max_tokens", type=int, default=150)
     parser.add_argument("--debug", action="store_true", help="Show debug info for first 5 tokens")
+    parser.add_argument("--recurrent-steps", type=int, default=None,
+                        help="Override recurrent depth steps at inference (default: use training value)")
     args = parser.parse_args()
+
+    if args.recurrent_steps is not None:
+        model.set_inference_recurrent_steps(args.recurrent_steps)
+        train_T = model_config.num_recurrent_steps
+        print(f"Recurrent steps: {train_T} (train) → {args.recurrent_steps} (inference)")
 
     print("=" * 60)
     print("  MiniGPT Chat — tapez 'quit' pour quitter")

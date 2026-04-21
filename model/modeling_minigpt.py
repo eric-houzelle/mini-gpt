@@ -38,6 +38,11 @@ class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
         """ACT ponder cost from the recurrent loop (0 when not using RDT)."""
         return self.model.act_loss
 
+    def set_inference_recurrent_steps(self, steps: int | None):
+        """Override the number of recurrent steps for inference.
+        Set to None to revert to training default."""
+        self.model.set_inference_recurrent_steps(steps)
+
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()
 
