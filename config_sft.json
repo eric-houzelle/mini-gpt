@@ -31,6 +31,11 @@
       "assistant_key": "assistant"
     },
     {
+      "name": "CATIE-AQ/facebook-community-alignment-dataset_french_conversation",
+      "format": "conversations",
+      "conversations_key": "conversation"
+    },
+    {
       "name": "angeluriot/french_instruct",
       "format": "conversations",
       "conversations_key": "conversation",
