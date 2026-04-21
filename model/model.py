@@ -1,9 +1,81 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from transformers import PreTrainedModel
 from .configuration import MiniGPTConfig
+
+
+# ---------------------------------------------------------------------------
+# Recurrent-Depth Transformer (RDT) components
+# Ref: OpenMythos / Parcae (Prairie et al., 2026)
+# ---------------------------------------------------------------------------
+
+
+class LTIInjection(nn.Module):
+    """Linear Time-Invariant state injection for the recurrent loop.
+
+    At each iteration t:
+        h(t+1) = A · h(t) + B · e + transformer_output
+
+    Stability guarantee: ρ(A) < 1 by construction.
+    A is parameterised as  A = U · diag(σ(a)) · V^T  where  σ(a) ∈ (0, 1)
+    via a sigmoid on unconstrained parameters *a*.  Because the singular
+    values are all < 1, the spectral radius is guaranteed < 1.
+    We use a *diagonal* A for efficiency (embed_dim params, not embed_dim²).
+    """
+
+    def __init__(self, embed_dim: int):
+        super().__init__()
+        self.a_logit = nn.Parameter(torch.zeros(embed_dim))
+        self.b_scale = nn.Parameter(torch.ones(embed_dim) * 0.1)
+
+    def forward(self, h: torch.Tensor, encoded_input: torch.Tensor) -> torch.Tensor:
+        a = torch.sigmoid(self.a_logit)
+        return a * h + self.b_scale * encoded_input
+
+
+class DepthLoRA(nn.Module):
+    """Low-rank adaptation applied per recurrent depth step.
+
+    Adds a small  delta = (x @ A) @ B  to the hidden state, where A and B
+    have shape (embed_dim, rank) and (rank, embed_dim) respectively.
+    Each loop iteration t uses its own DepthLoRA so behavior differs per step.
+    """
+
+    def __init__(self, embed_dim: int, rank: int):
+        super().__init__()
+        self.down = nn.Linear(embed_dim, rank, bias=False)
+        self.up = nn.Linear(rank, embed_dim, bias=False)
+        nn.init.kaiming_uniform_(self.down.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.up.weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.up(self.down(x))
+
+
+class ACTHalting(nn.Module):
+    """Adaptive Computation Time halting mechanism.
+
+    Per-position scalar that learns when to stop the recurrent loop.
+    Produces a halting probability p(t) at each step t; once cumulative
+    probability exceeds *threshold*, the position stops receiving updates.
+
+    Returns:
+        weighted_state:  Σ_t  w(t) · h(t)  — the ACT-blended output
+        act_loss:        ponder cost  (Σ cumul_prob)  for regularisation
+    """
+
+    def __init__(self, embed_dim: int, threshold: float = 0.99):
+        super().__init__()
+        self.halt_proj = nn.Linear(embed_dim, 1, bias=True)
+        self.threshold = threshold
+
+    def compute_halt_prob(self, h: torch.Tensor) -> torch.Tensor:
+        """h: (B, T, D) -> (B, T, 1) halt probability."""
+        return torch.sigmoid(self.halt_proj(h))
 
 
 class RoPEEmbedding(nn.Module):

@@ -33,6 +33,11 @@ class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
         self.lm_head = nn.Linear(config.embed_dim, config.vocab_size, bias=False)
         self.post_init()
 
+    @property
+    def act_loss(self) -> torch.Tensor:
+        """ACT ponder cost from the recurrent loop (0 when not using RDT)."""
+        return self.model.act_loss
+
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()
 
@@ -88,7 +93,6 @@ class MiniGPTForCausalLM(PreTrainedModel, GenerationMixin):
         # Calculer la loss si labels fournis
         loss = None
         if labels is not None:
-            # Shift logits et labels pour l'alignement (prédire le token suivant)
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             loss_fct = nn.CrossEntropyLoss()

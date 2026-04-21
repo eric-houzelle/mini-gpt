@@ -1,4 +1,9 @@
-from .model import MiniGPT  # Pour compatibilité avec train.py et generate.py
+from .model import (
+    MiniGPT,
+    LTIInjection,
+    DepthLoRA,
+    ACTHalting,
+)
 from .modeling_minigpt_core import MiniGPTModel
 from .modeling_minigpt import MiniGPTForCausalLM
 from .configuration import MiniGPTConfig
@@ -9,8 +14,15 @@ try:
     AutoModelForCausalLM.register(MiniGPTConfig, MiniGPTForCausalLM)
     AutoModel.register(MiniGPTConfig, MiniGPTModel)
 except Exception:
-    # Si l'enregistrement échoue, ce n'est pas critique
     pass
 
-__all__ = ["MiniGPT", "MiniGPTModel", "MiniGPTForCausalLM", "MiniGPTConfig"]
+__all__ = [
+    "MiniGPT",
+    "MiniGPTModel",
+    "MiniGPTForCausalLM",
+    "MiniGPTConfig",
+    "LTIInjection",
+    "DepthLoRA",
+    "ACTHalting",
+]
 

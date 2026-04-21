@@ -59,6 +59,17 @@ weight_sharing = config["model"].get("weight_sharing", "none")
 use_rope = config["model"].get("use_rope", True)
 use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", False)
 
+# Recurrent-Depth Transformer params
+rdt_config = config["model"].get("recurrent_depth", {})
+num_prelude_layers = rdt_config.get("num_prelude_layers", 2)
+num_coda_layers = rdt_config.get("num_coda_layers", 2)
+num_recurrent_steps = rdt_config.get("num_recurrent_steps", 8)
+use_lti_injection = rdt_config.get("use_lti_injection", True)
+use_act_halting = rdt_config.get("use_act_halting", True)
+act_halt_threshold = rdt_config.get("act_halt_threshold", 0.99)
+depth_lora_rank = rdt_config.get("depth_lora_rank", 8)
+act_loss_weight = rdt_config.get("act_loss_weight", 0.01)
+
 max_texts_per_ds = config["data"].get("max_texts_per_dataset", config["data"].get("max_texts", 200000))
 train_split_ratio = config["data"]["train_split_ratio"]
 dataset_configs = config.get("datasets", [])
@@ -261,6 +272,13 @@ model_config = MiniGPTConfig(
     weight_sharing=weight_sharing,
     use_rope=use_rope,
     use_gradient_checkpointing=use_gradient_checkpointing,
+    num_prelude_layers=num_prelude_layers,
+    num_coda_layers=num_coda_layers,
+    num_recurrent_steps=num_recurrent_steps,
+    use_lti_injection=use_lti_injection,
+    use_act_halting=use_act_halting,
+    act_halt_threshold=act_halt_threshold,
+    depth_lora_rank=depth_lora_rank,
 )
 
 model = MiniGPTForCausalLM(model_config)
@@ -453,6 +471,8 @@ for epoch in range(start_epoch, num_epochs):
             logits = model(xb).logits
             B, T, C = logits.shape
             loss = loss_fn(logits.view(B * T, C), yb.view(B * T))
+            if weight_sharing == "recurrent_depth" and use_act_halting:
+                loss = loss + act_loss_weight * model.act_loss
             loss = loss / grad_accum_steps
 
         scaler.scale(loss).backward()

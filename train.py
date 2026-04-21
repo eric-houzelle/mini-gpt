@@ -46,9 +46,20 @@ num_kv_heads = config["model"].get("num_kv_heads", heads)
 block_size = config["model"]["block_size"]
 dropout = config["model"]["dropout"]
 hidden_dim = config["model"]["hidden_dim"]
-weight_sharing = config["model"].get("weight_sharing", "none")  # STLM: weight sharing entre blocs
-use_rope = config["model"].get("use_rope", True)  # STLM: RoPE embeddings
+weight_sharing = config["model"].get("weight_sharing", "none")
+use_rope = config["model"].get("use_rope", True)
 use_gradient_checkpointing = config["model"].get("use_gradient_checkpointing", True)
+
+# Recurrent-Depth Transformer params
+rdt_config = config["model"].get("recurrent_depth", {})
+num_prelude_layers = rdt_config.get("num_prelude_layers", 2)
+num_coda_layers = rdt_config.get("num_coda_layers", 2)
+num_recurrent_steps = rdt_config.get("num_recurrent_steps", 8)
+use_lti_injection = rdt_config.get("use_lti_injection", True)
+use_act_halting = rdt_config.get("use_act_halting", True)
+act_halt_threshold = rdt_config.get("act_halt_threshold", 0.99)
+depth_lora_rank = rdt_config.get("depth_lora_rank", 8)
+act_loss_weight = rdt_config.get("act_loss_weight", 0.01)
 
 max_texts = config["data"]["max_texts"]
 train_split_ratio = config["data"]["train_split_ratio"]
@@ -333,7 +344,14 @@ model_config = MiniGPTConfig(
     hidden_dim=hidden_dim,
     weight_sharing=weight_sharing,
     use_rope=use_rope,
-    use_gradient_checkpointing=use_gradient_checkpointing
+    use_gradient_checkpointing=use_gradient_checkpointing,
+    num_prelude_layers=num_prelude_layers,
+    num_coda_layers=num_coda_layers,
+    num_recurrent_steps=num_recurrent_steps,
+    use_lti_injection=use_lti_injection,
+    use_act_halting=use_act_halting,
+    act_halt_threshold=act_halt_threshold,
+    depth_lora_rank=depth_lora_rank,
 )
 
 model = MiniGPTForCausalLM(model_config).to(device)
@@ -380,6 +398,18 @@ print(f"\n🔬 STLM Techniques:")
 print(f"   - Weight sharing: {weight_sharing.upper()}")
 print(f"   - Position encoding: {'RoPE' if use_rope else 'Learned'}")
 print(f"   - FFN activation: SwiGLU")
+if weight_sharing == "recurrent_depth":
+    print(f"\n🔄 Recurrent-Depth Transformer:")
+    print(f"   - Prelude layers: {num_prelude_layers}")
+    print(f"   - Recurrent steps (T): {num_recurrent_steps}")
+    print(f"   - Coda layers: {num_coda_layers}")
+    print(f"   - LTI injection: {'ON' if use_lti_injection else 'OFF'}")
+    print(f"   - ACT halting: {'ON (threshold={act_halt_threshold})' if use_act_halting else 'OFF'}")
+    print(f"   - ACT loss weight: {act_loss_weight}")
+    print(f"   - Depth LoRA rank: {depth_lora_rank}")
+    rdt_extra = model_stats.get('rdt_extra', 0)
+    if rdt_extra:
+        print(f"   - RDT extra params (LTI+LoRA+ACT): {human_readable(rdt_extra)}")
 print(f"\n⚡ Training:")
 print(f"   - Micro-batch: {batch_size}")
 print(f"   - Gradient accumulation: {grad_accum_steps} steps")
@@ -488,6 +518,9 @@ for epoch in range(start_epoch, num_epochs):
             logits = model(xb).logits
             B, T, C = logits.shape
             loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
+            if weight_sharing == "recurrent_depth" and use_act_halting:
+                raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+                loss = loss + act_loss_weight * raw_model.act_loss
             loss = loss / grad_accum_steps
 
         scaler.scale(loss).backward()
