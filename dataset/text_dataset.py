@@ -54,39 +54,57 @@ class LazyTextDataset(Dataset):
 def _tokenize_worker(args):
     """Worker function for parallel tokenization.
 
-    Each worker gets a chunk of texts, tokenizes them, splits into
-    block_size windows, and writes to its own temp file.
-    Returns (temp_file_path, num_sequences).
+    Reads texts from a shard file on disk (no RAM duplication),
+    tokenizes them, and writes token sequences to an output file.
     """
-    worker_id, texts_chunk, tokenizer_name, block_size, batch_size, cache_dir = args
+    worker_id, shard_path, output_path, tokenizer_name, block_size, batch_size = args
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(tokenizer_name, use_fast=True)
 
-    tmp_path = os.path.join(cache_dir, f"_worker_{worker_id}.jsonl")
     count = 0
+    batch = []
 
-    with open(tmp_path, "w") as f:
-        for i in range(0, len(texts_chunk), batch_size):
-            encoded = tok(
-                texts_chunk[i : i + batch_size],
-                add_special_tokens=True,
-                truncation=False,
-                padding=False,
-                return_attention_mask=False,
-            )["input_ids"]
-            for ids in encoded:
-                for start in range(0, len(ids), block_size):
-                    chunk = ids[start : start + block_size]
-                    if len(chunk) >= 2:
-                        f.write(json.dumps(chunk) + "\n")
-                        count += 1
+    with open(output_path, "w") as out, open(shard_path, "r") as inp:
+        for line in inp:
+            text = line.rstrip("\n")
+            if not text:
+                continue
+            batch.append(text)
 
-    return tmp_path, count
+            if len(batch) >= batch_size:
+                count += _tokenize_batch(tok, batch, block_size, out)
+                batch = []
+
+        if batch:
+            count += _tokenize_batch(tok, batch, block_size, out)
+
+    os.remove(shard_path)
+    return output_path, count
+
+
+def _tokenize_batch(tok, batch, block_size, out_file):
+    """Tokenize a batch of texts, chunk into block_size, write to file."""
+    encoded = tok(
+        batch,
+        add_special_tokens=True,
+        truncation=False,
+        padding=False,
+        return_attention_mask=False,
+    )["input_ids"]
+    count = 0
+    for ids in encoded:
+        for start in range(0, len(ids), block_size):
+            chunk = ids[start : start + block_size]
+            if len(chunk) >= 2:
+                out_file.write(json.dumps(chunk) + "\n")
+                count += 1
+    return count
 
 
 def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache", batch_size=10_000):
-    """Tokenize in parallel across all CPUs and stream to a JSONL cache file.
+    """Tokenize in parallel across CPUs and stream to a JSONL cache file.
 
+    Writes text shards to disk first so workers don't duplicate RAM.
     On subsequent calls, loads from cache.
     """
     os.makedirs(cache_dir, exist_ok=True)
@@ -103,32 +121,42 @@ def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache", batch_si
                 all_ids.append(json.loads(line))
         return all_ids
 
-    num_workers = max(1, multiprocessing.cpu_count() - 1)
+    num_workers = min(max(1, multiprocessing.cpu_count() - 1), 12)
     chunk_size = (len(texts) + num_workers - 1) // num_workers
 
-    print(f"⚡ Parallel tokenization: {num_workers} workers, "
-          f"{len(texts):,} texts, batch_size={batch_size}")
-
-    worker_args = []
+    print(f"⚡ Writing {num_workers} text shards to disk (freeing RAM)...")
+    shard_paths = []
     for w in range(num_workers):
         start = w * chunk_size
         end = min(start + chunk_size, len(texts))
         if start >= len(texts):
             break
-        worker_args.append((
-            w, texts[start:end], tokenizer.name_or_path,
-            block_size, batch_size, cache_dir,
-        ))
+        shard_path = os.path.join(cache_dir, f"_shard_{w}.txt")
+        with open(shard_path, "w") as f:
+            for t in texts[start:end]:
+                f.write(t.replace("\n", " ") + "\n")
+        shard_paths.append(shard_path)
 
-    with multiprocessing.Pool(len(worker_args)) as pool:
+    actual_workers = len(shard_paths)
+    del texts  # free the big list before forking
+
+    print(f"⚡ Parallel tokenization: {actual_workers} workers, batch_size={batch_size}")
+
+    worker_args = [
+        (w, shard_paths[w],
+         os.path.join(cache_dir, f"_worker_{w}.jsonl"),
+         tokenizer.name_or_path, block_size, batch_size)
+        for w in range(actual_workers)
+    ]
+
+    with multiprocessing.Pool(actual_workers) as pool:
         results = list(tqdm(
             pool.imap(_tokenize_worker, worker_args),
-            total=len(worker_args),
+            total=actual_workers,
             desc="Tokenizing (workers)",
             unit="worker",
         ))
 
-    # Merge worker outputs into final cache (preserves original order)
     tmp_path = cache_path + ".tmp"
     total_count = 0
     all_ids = []
