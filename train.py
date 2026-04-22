@@ -601,6 +601,14 @@ for epoch in range(start_epoch, num_epochs):
             loss = loss / grad_accum_steps
 
         scaler.scale(loss).backward()
+
+        if not torch.isfinite(loss):
+            print(f"[{now()}] ⚠️  NaN/Inf loss detected at step {global_step}, skipping update")
+            optimizer.zero_grad()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            continue
+
         running_loss += loss.item()
 
         is_accum_step = (i + 1) % grad_accum_steps == 0
@@ -608,7 +616,12 @@ for epoch in range(start_epoch, num_epochs):
 
         if is_accum_step or is_last_batch:
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+            if not torch.isfinite(grad_norm):
+                print(f"[{now()}] ⚠️  Non-finite gradients at step {global_step}, skipping update")
+                optimizer.zero_grad()
+                scaler.update()
+                continue
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()

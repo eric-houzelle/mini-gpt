@@ -33,7 +33,7 @@ class LTIInjection(nn.Module):
         self.b_scale = nn.Parameter(torch.ones(embed_dim) * 0.1)
 
     def forward(self, h: torch.Tensor, encoded_input: torch.Tensor) -> torch.Tensor:
-        a = torch.sigmoid(self.a_logit)
+        a = torch.sigmoid(self.a_logit).clamp(max=0.95)
         return a * h + self.b_scale * encoded_input
 
 
