@@ -38,6 +38,7 @@ warmup = config["training"]["warmup"]
 override_lr = os.getenv("OVERRIDE_LR") or config["training"].get("override_lr")
 override_best_loss = os.getenv("OVERRIDE_BEST_LOSS") or config["training"].get("override_best_loss")
 grad_accum_steps = config["training"].get("gradient_accumulation_steps", 1)
+max_steps = config["training"].get("max_steps", None)
 
 embed_dim = config["model"]["embed_dim"]
 depth = config["model"]["depth"]
@@ -563,8 +564,12 @@ else:
     print(f"\n🆕 Starting fresh training")
 
 steps_per_epoch = (len(train_loader) + grad_accum_steps - 1) // grad_accum_steps
-total_steps = num_epochs * steps_per_epoch
-print(f"📊 Scheduler: steps_per_epoch={steps_per_epoch}, total_steps={total_steps}, warmup={warmup}, current_step={global_step}")
+if max_steps is not None:
+    total_steps = max_steps
+    print(f"📊 Scheduler: max_steps={max_steps}, warmup={warmup}, current_step={global_step}")
+else:
+    total_steps = num_epochs * steps_per_epoch
+    print(f"📊 Scheduler: steps_per_epoch={steps_per_epoch}, total_steps={total_steps}, warmup={warmup}, current_step={global_step}")
 
 def get_global_step():
     return global_step
@@ -668,6 +673,10 @@ for epoch in range(start_epoch, num_epochs):
             global_step += 1
             scheduler.step()
 
+            if max_steps is not None and global_step >= max_steps:
+                print(f"[{now()}] 🏁 Reached max_steps={max_steps}, stopping training")
+                break
+
             if global_step % 50 == 0:
                 trackio.log(
                     {
@@ -737,4 +746,6 @@ for epoch in range(start_epoch, num_epochs):
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 model.train()
+    if max_steps is not None and global_step >= max_steps:
+        break
 trackio.finish()
