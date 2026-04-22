@@ -574,8 +574,18 @@ trackio.init(
     resume="allow"
 )
 
-scaler = torch.amp.GradScaler("cuda")
+use_bf16 = torch.cuda.is_bf16_supported()
+if use_bf16:
+    print("✅ Using bf16 mixed precision (recommended for RDT)")
+    amp_dtype = torch.bfloat16
+    scaler = None
+else:
+    print("⚠️  bf16 not supported, falling back to fp16 with GradScaler")
+    amp_dtype = torch.float16
+    scaler = torch.amp.GradScaler("cuda")
 model = torch.compile(model)
+nan_streak = 0
+MAX_NAN_STREAK = 20
 
 epochs_without_improvement = 0
 patience = 10
@@ -591,7 +601,7 @@ for epoch in range(start_epoch, num_epochs):
     for i, (xb, yb) in enumerate(train_loader):
         xb, yb = xb.to(device), yb.to(device)
 
-        with torch.amp.autocast("cuda"):
+        with torch.amp.autocast("cuda", dtype=amp_dtype):
             logits = model(xb).logits
             B, T, C = logits.shape
             loss = loss_fn(logits.view(B*T, C), yb.view(B*T))
@@ -600,30 +610,48 @@ for epoch in range(start_epoch, num_epochs):
                 loss = loss + act_loss_weight * raw_model.act_loss
             loss = loss / grad_accum_steps
 
-        scaler.scale(loss).backward()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
         if not torch.isfinite(loss):
-            print(f"[{now()}] ⚠️  NaN/Inf loss detected at step {global_step}, skipping update")
+            nan_streak += 1
+            if nan_streak <= 3 or nan_streak % 10 == 0:
+                print(f"[{now()}] ⚠️  NaN/Inf loss at step {global_step} (streak: {nan_streak}/{MAX_NAN_STREAK})")
             optimizer.zero_grad()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if nan_streak >= MAX_NAN_STREAK and os.path.exists(MODEL_SAVE_PATH):
+                print(f"[{now()}] 🔄 {MAX_NAN_STREAK} consecutive NaN — reloading last checkpoint")
+                ckpt = torch.load(MODEL_SAVE_PATH, map_location=device)
+                raw = model._orig_mod if hasattr(model, "_orig_mod") else model
+                raw.load_state_dict(ckpt["model_state_dict"], strict=False)
+                optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+                nan_streak = 0
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             continue
 
+        nan_streak = 0
         running_loss += loss.item()
 
         is_accum_step = (i + 1) % grad_accum_steps == 0
         is_last_batch = (i + 1) == len(train_loader)
 
         if is_accum_step or is_last_batch:
-            scaler.unscale_(optimizer)
+            if scaler is not None:
+                scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
             if not torch.isfinite(grad_norm):
                 print(f"[{now()}] ⚠️  Non-finite gradients at step {global_step}, skipping update")
                 optimizer.zero_grad()
-                scaler.update()
+                if scaler is not None:
+                    scaler.update()
                 continue
-            scaler.step(optimizer)
-            scaler.update()
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
             optimizer.zero_grad()
             scheduler.step()
             global_step += 1
