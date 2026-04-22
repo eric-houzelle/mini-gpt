@@ -252,13 +252,14 @@ def get_current_block_size(step, schedule, max_block_size):
     return min(current, max_block_size)
 
 
-def compute_validation_loss(model, val_loader, loss_fn, device, max_batches=50):
-    """Calcule la loss de validation sur un sous-ensemble du loader pour aller plus vite."""
+def compute_validation_loss(model, val_ds, loss_fn, device, collate_fn, max_batches=50, val_batch_size=16):
+    """Calcule la loss de validation avec un petit batch pour éviter l'OOM."""
     model.eval()
+    small_val_loader = DataLoader(val_ds, batch_size=val_batch_size, shuffle=False, collate_fn=collate_fn)
     total_loss = 0.0
     num_batches = 0
     with torch.no_grad():
-        for xb_val, yb_val in val_loader:
+        for xb_val, yb_val in small_val_loader:
             if num_batches >= max_batches:
                 break
             xb_val, yb_val = xb_val.to(device), yb_val.to(device)
@@ -266,7 +267,11 @@ def compute_validation_loss(model, val_loader, loss_fn, device, max_batches=50):
             B, T, C = logits.shape
             total_loss += loss_fn(logits.view(B * T, C), yb_val.view(B * T)).item()
             num_batches += 1
-    return total_loss / num_batches
+            del xb_val, yb_val, logits
+    del small_val_loader
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return total_loss / max(num_batches, 1)
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("inf")):
     """
@@ -685,7 +690,7 @@ for epoch in range(start_epoch, num_epochs):
             if global_step % EVAL_EVERY_STEPS == 0:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                val_loss = compute_validation_loss(model, val_loader, loss_fn, device)
+                val_loss = compute_validation_loss(model, val_ds, loss_fn, device, collate_fn)
                 improvement = best_loss - val_loss
                 if best_loss != float("inf"):
                     print(f"[{now()}] [step {global_step}] Validation loss: {val_loss:.4f} (best: {best_loss:.4f}, diff: {improvement:+.4f})")
