@@ -444,13 +444,20 @@ trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 # Afficher les stats détaillées du modèle
 model_stats = model.count_parameters()
 
-def warmup_then_cosine(optimizer, warmup_steps, total_steps, min_lr_ratio=0.1):
-    def lr_lambda(step):
+class _GlobalStepLR(torch.optim.lr_scheduler.LambdaLR):
+    """LR scheduler that reads global_step directly instead of an internal counter.
+    This avoids desync when steps are skipped (NaN, checkpoint resume, etc.)."""
+    pass
+
+def warmup_then_cosine(optimizer, warmup_steps, total_steps, step_fn, min_lr_ratio=0.1):
+    """step_fn: callable returning the current global step."""
+    def lr_lambda(_unused_step):
+        step = step_fn()
         if step < warmup_steps:
-            return step / warmup_steps
+            return max(step, 1) / warmup_steps
         progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
         return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1.0 + math.cos(math.pi * progress))
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    return _GlobalStepLR(optimizer, lr_lambda)
 
 
 def human_readable(num):
@@ -557,20 +564,20 @@ else:
 
 total_steps = num_epochs * len(train_loader)
 
-scheduler = warmup_then_cosine(optimizer, warmup_steps=warmup, total_steps=total_steps)
+def get_global_step():
+    return global_step
+
+scheduler = warmup_then_cosine(optimizer, warmup_steps=warmup, total_steps=total_steps, step_fn=get_global_step)
 
 if override_lr is not None:
-    # When overriding LR, rebuild the scheduler so the cosine decay runs
-    # from global_step to total_steps with the new base LR.
     override_lr = float(override_lr)
     for pg in optimizer.param_groups:
         pg["lr"] = override_lr
         pg["initial_lr"] = override_lr
-    remaining_steps = total_steps - global_step
-    scheduler = warmup_then_cosine(optimizer, warmup_steps=0, total_steps=remaining_steps)
-    print(f"🔧 Override LR actif -> LR={override_lr}, cosine sur {remaining_steps} steps restants")
-elif scheduler_state_dict is not None:
-    scheduler.load_state_dict(scheduler_state_dict)
+    scheduler = warmup_then_cosine(optimizer, warmup_steps=0, total_steps=total_steps, step_fn=get_global_step)
+    print(f"🔧 Override LR actif -> LR={override_lr}, cosine sur {total_steps - global_step} steps restants")
+
+print(f"📊 Scheduler: warmup={warmup}, total_steps={total_steps}, current_step={global_step}")
 
 trackio.init(
     project="mini-gpt-1511-v5",
