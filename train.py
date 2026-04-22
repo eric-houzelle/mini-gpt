@@ -681,22 +681,6 @@ for epoch in range(start_epoch, num_epochs):
                     step=global_step,
                 )
 
-                _, gen_text, gen_text_raw, gen_tokens = generate_example_v2(
-                    model,
-                    tokenizer,
-                    block_size,
-                    device,
-                    DATASET_TEMPLATE,
-                    EVAL_PROMPT,
-                    temperature=0.7,
-                    top_k=0,
-                    top_p=0.9
-                )
-                print(f"[{now()}] Exemple génération v2 (suite de l'invite):\n{gen_text}")
-                if not gen_text:
-                    print(f"[DEBUG] gen_tokens v2 (len={len(gen_tokens)}): {gen_tokens}")
-                    print(f"[DEBUG] gen_text_raw v2: {gen_text_raw}")
-
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 model.train()
