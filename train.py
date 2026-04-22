@@ -562,7 +562,9 @@ else:
     scheduler_state_dict = None
     print(f"\n🆕 Starting fresh training")
 
-total_steps = num_epochs * len(train_loader)
+steps_per_epoch = (len(train_loader) + grad_accum_steps - 1) // grad_accum_steps
+total_steps = num_epochs * steps_per_epoch
+print(f"📊 Scheduler: steps_per_epoch={steps_per_epoch}, total_steps={total_steps}, warmup={warmup}, current_step={global_step}")
 
 def get_global_step():
     return global_step
@@ -576,8 +578,6 @@ if override_lr is not None:
         pg["initial_lr"] = override_lr
     scheduler = warmup_then_cosine(optimizer, warmup_steps=0, total_steps=total_steps, step_fn=get_global_step)
     print(f"🔧 Override LR actif -> LR={override_lr}, cosine sur {total_steps - global_step} steps restants")
-
-print(f"📊 Scheduler: warmup={warmup}, total_steps={total_steps}, current_step={global_step}")
 
 trackio.init(
     project="mini-gpt-1511-v5",
@@ -665,8 +665,8 @@ for epoch in range(start_epoch, num_epochs):
             else:
                 optimizer.step()
             optimizer.zero_grad()
-            scheduler.step()
             global_step += 1
+            scheduler.step()
 
             if global_step % 50 == 0:
                 trackio.log(
