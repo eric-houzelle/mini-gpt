@@ -13,7 +13,8 @@ Examples:
         --text-file corpus_sample.txt \
         --hf-tokenizers camembert-base mistralai/Mistral-Nemo-Base-2407 \
         --train-spm \
-        --spm-vocab-size 32000
+        --spm-model-types unigram bpe \
+        --spm-vocab-sizes 16000 32000 50000
 """
 
 from __future__ import annotations
@@ -136,7 +137,12 @@ def compute_metrics(name: str, texts: list[str], encode_fn) -> Metrics:
     )
 
 
-def train_sentencepiece(texts: list[str], args: argparse.Namespace) -> Path:
+def train_sentencepiece(
+    texts: list[str],
+    args: argparse.Namespace,
+    model_type: str,
+    vocab_size: int,
+) -> Path:
     try:
         import sentencepiece as spm
     except ImportError as exc:
@@ -144,7 +150,7 @@ def train_sentencepiece(texts: list[str], args: argparse.Namespace) -> Path:
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    prefix = out_dir / f"fr_unigram_{args.spm_vocab_size}"
+    prefix = out_dir / f"fr_{model_type}_{vocab_size}"
 
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as f:
         input_path = Path(f.name)
@@ -155,8 +161,8 @@ def train_sentencepiece(texts: list[str], args: argparse.Namespace) -> Path:
         spm.SentencePieceTrainer.train(
             input=str(input_path),
             model_prefix=str(prefix),
-            vocab_size=args.spm_vocab_size,
-            model_type="unigram",
+            vocab_size=vocab_size,
+            model_type=model_type,
             character_coverage=args.character_coverage,
             normalization_rule_name="nfkc",
             pad_id=0,
@@ -227,7 +233,14 @@ def main() -> None:
     parser.add_argument("--hf-tokenizers", nargs="*", default=["camembert-base"])
     parser.add_argument("--train-spm", action="store_true")
     parser.add_argument("--spm-model", help="Existing SentencePiece .model to compare")
-    parser.add_argument("--spm-vocab-size", type=int, default=32000)
+    parser.add_argument(
+        "--spm-vocab-size",
+        type=int,
+        default=None,
+        help="Backward-compatible alias for one SentencePiece vocab size",
+    )
+    parser.add_argument("--spm-vocab-sizes", nargs="*", type=int, default=[32000])
+    parser.add_argument("--spm-model-types", nargs="*", default=["unigram"], choices=["unigram", "bpe"])
     parser.add_argument("--character-coverage", type=float, default=0.9995)
     parser.add_argument("--spm-input-sentence-size", type=int, default=1000000)
     parser.add_argument("--output-dir", default="tokenizers")
@@ -253,9 +266,12 @@ def main() -> None:
 
     spm_models = []
     if args.train_spm:
-        model_path = train_sentencepiece(texts, args)
-        spm_models.append(model_path)
-        print(f"Trained SentencePiece model: {model_path}")
+        vocab_sizes = [args.spm_vocab_size] if args.spm_vocab_size else args.spm_vocab_sizes
+        for model_type in args.spm_model_types:
+            for vocab_size in vocab_sizes:
+                model_path = train_sentencepiece(texts, args, model_type=model_type, vocab_size=vocab_size)
+                spm_models.append(model_path)
+                print(f"Trained SentencePiece model: {model_path}")
     if args.spm_model:
         spm_models.append(Path(args.spm_model))
 
