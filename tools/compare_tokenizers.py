@@ -173,6 +173,7 @@ def train_sentencepiece(
             input_sentence_size=args.spm_input_sentence_size,
             shuffle_input_sentence=True,
             train_extremely_large_corpus=True,
+            hard_vocab_limit=args.spm_hard_vocab_limit,
         )
     finally:
         input_path.unlink(missing_ok=True)
@@ -231,6 +232,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--shuffle", action="store_true")
     parser.add_argument("--hf-tokenizers", nargs="*", default=["camembert-base"])
+    parser.add_argument("--trust-remote-code", action="store_true")
     parser.add_argument("--train-spm", action="store_true")
     parser.add_argument("--spm-model", help="Existing SentencePiece .model to compare")
     parser.add_argument(
@@ -241,6 +243,11 @@ def main() -> None:
     )
     parser.add_argument("--spm-vocab-sizes", nargs="*", type=int, default=[32000])
     parser.add_argument("--spm-model-types", nargs="*", default=["unigram"], choices=["unigram", "bpe"])
+    parser.add_argument(
+        "--spm-hard-vocab-limit",
+        action="store_true",
+        help="Fail if SentencePiece cannot build exactly the requested vocab size",
+    )
     parser.add_argument("--character-coverage", type=float, default=0.9995)
     parser.add_argument("--spm-input-sentence-size", type=int, default=1000000)
     parser.add_argument("--output-dir", default="tokenizers")
@@ -261,7 +268,11 @@ def main() -> None:
             from transformers import AutoTokenizer
         except ImportError as exc:
             raise RuntimeError("transformers is required for --hf-tokenizers. Run: pip install -r requirements.txt") from exc
-        tok = AutoTokenizer.from_pretrained(name, use_fast=True)
+        tok = AutoTokenizer.from_pretrained(
+            name,
+            use_fast=True,
+            trust_remote_code=args.trust_remote_code,
+        )
         results.append(compute_metrics(name, texts, lambda text, tok=tok: tok.encode(text, add_special_tokens=False)))
 
     spm_models = []
