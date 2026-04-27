@@ -1,0 +1,70 @@
+{
+  "training": {
+    "num_epochs": 100,
+    "max_steps": 100000,
+    "batch_size": 80,
+    "learning_rate": 6e-4,
+    "warmup": 2000,
+    "override_lr": null,
+    "override_best_loss": null,
+    "gradient_accumulation_steps": 1
+  },
+  "model": {
+    "embed_dim": 1536,
+    "depth": 14,
+    "heads": 24,
+    "num_kv_heads": 6,
+    "block_size": 512,
+    "dropout": 0.05,
+    "hidden_dim": 8192,
+    "weight_sharing": "recurrent_depth",
+    "use_rope": true,
+    "use_gradient_checkpointing": true,
+    "recurrent_depth": {
+      "num_prelude_layers": 4,
+      "num_coda_layers": 4,
+      "num_recurrent_steps": 8,
+      "use_lti_injection": true,
+      "use_act_halting": true,
+      "act_halt_threshold": 0.99,
+      "depth_lora_rank": 32,
+      "act_loss_weight": 0.01
+    }
+  },
+  "data": {
+    "max_texts": 4000000,
+    "max_texts_per_dataset": 2000000,
+    "train_split_ratio": 0.95,
+    "pretokenize": true,
+    "progressive_block_sizes": [[0, 1024], [2000, 1024]]
+  },
+  "datasets": [
+    {
+      "name": "HuggingFaceFW/fineweb-2",
+      "subset": "fra_Latn",
+      "text_key": "text",
+      "max_texts": 2000000,
+      "streaming": true
+    },
+    {
+      "name": "uonlp/CulturaX",
+      "subset": "fr",
+      "text_key": "text",
+      "max_texts": 1000000,
+      "streaming": true
+    },
+    {
+      "name": "allenai/c4",
+      "subset": "fr",
+      "text_key": "text",
+      "max_texts": 500000,
+      "streaming": true
+    },
+    {
+      "name": "CATIE-AQ/wikipedia_fr_2022",
+      "text_key": "text",
+      "max_texts": 500000,
+      "streaming": true
+    }
+  ]
+}
