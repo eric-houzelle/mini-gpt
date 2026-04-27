@@ -18,7 +18,7 @@ import trackio
 import math
 load_dotenv()
 
-CONFIG_PATH = "config.json"
+CONFIG_PATH = os.getenv("CONFIG_PATH", "config.json")
 with open(CONFIG_PATH, "r") as f:
     config = json.load(f)
 
@@ -94,7 +94,8 @@ def _load_single_pretrain_dataset(ds_cfg):
     """Load one pretraining dataset and return a list of text strings.
 
     Supports "data_files" to download only specific parquet files instead of
-    the entire dataset (critical for huge datasets like fineweb-2).
+    the entire dataset, and "streaming": true to read only max_texts examples
+    from very large datasets like fineweb-2.
     """
     name = ds_cfg["name"]
     text_key = ds_cfg.get("text_key", "text")
@@ -102,54 +103,70 @@ def _load_single_pretrain_dataset(ds_cfg):
     max_n = ds_cfg.get("max_texts", max_texts_per_ds)
     template = ds_cfg.get("template")
     data_files = ds_cfg.get("data_files")
+    streaming = ds_cfg.get("streaming", False)
 
     label = f"  → Loading {name}"
     if subset:
         label += f" [{subset}]"
     if data_files:
         label += f" (data_files={data_files})"
+    if streaming:
+        label += " (streaming)"
     print(label)
 
     if name.endswith('.csv') and os.path.exists(name):
         ds = load_dataset("csv", data_files=name, split="train")
     elif data_files:
         if subset:
-            ds = load_dataset(name, subset, data_files=data_files, split="train")
+            ds = load_dataset(name, subset, data_files=data_files, split="train", streaming=streaming)
         else:
-            ds = load_dataset(name, data_files=data_files, split="train")
+            ds = load_dataset(name, data_files=data_files, split="train", streaming=streaming)
     elif subset:
-        ds = load_dataset(name, subset, split="train")
+        ds = load_dataset(name, subset, split="train", streaming=streaming)
     else:
-        ds = load_dataset(name, split="train")
+        ds = load_dataset(name, split="train", streaming=streaming)
 
     filter_col = ds_cfg.get("filter_column")
     include_values = ds_cfg.get("include_values")
     exclude_values = ds_cfg.get("exclude_values")
-    if filter_col and filter_col in ds.column_names:
+    column_names = getattr(ds, "column_names", None)
+    if filter_col and (column_names is None or filter_col in column_names):
         if include_values:
             allowed = {v.lower() for v in include_values}
             ds = ds.filter(lambda x: str(x[filter_col]).lower() in allowed)
-            print(f"    Include filter on '{filter_col}': {len(ds)} rows")
+            if not streaming:
+                print(f"    Include filter on '{filter_col}': {len(ds)} rows")
         elif exclude_values:
             blocked = {v.lower() for v in exclude_values}
             ds = ds.filter(lambda x: str(x[filter_col]).lower() not in blocked)
-            print(f"    Exclude filter on '{filter_col}': {len(ds)} rows")
+            if not streaming:
+                print(f"    Exclude filter on '{filter_col}': {len(ds)} rows")
 
-    count = min(max_n, len(ds))
-    print(f"    Dataset loaded: {len(ds)} rows, taking {count}")
+    if streaming:
+        print(f"    Streaming up to {max_n} rows")
+        rows = []
+        for row in ds:
+            rows.append(row)
+            if len(rows) >= max_n:
+                break
+        count = len(rows)
+        print(f"    Streamed {count} rows")
+    else:
+        count = min(max_n, len(ds))
+        print(f"    Dataset loaded: {len(ds)} rows, taking {count}")
+        rows = ds.select(range(count))
 
     if template:
         class _SafeDict(dict):
             def __missing__(self, key):
                 return ""
-        subset_ds = ds.select(range(count))
-        result = [template.format_map(_SafeDict(row)) for row in subset_ds]
+        result = [template.format_map(_SafeDict(row)) for row in rows]
     else:
-        if text_key not in ds.column_names:
+        if column_names is not None and text_key not in column_names:
             raise ValueError(
-                f"Column '{text_key}' not found in {name}. Available: {ds.column_names}"
+                f"Column '{text_key}' not found in {name}. Available: {column_names}"
             )
-        result = ds[text_key][:count]
+        result = [row[text_key] for row in rows if text_key in row]
 
     result = [t for t in result if t and len(t.strip()) > 10]
     print(f"    → {len(result)} texts extracted")

@@ -1,7 +1,7 @@
 {
   "training": {
     "num_epochs": 100,
-    "max_steps": 50000,
+    "max_steps": 75000,
     "batch_size": 80,
     "learning_rate": 6e-4,
     "warmup": 2000,
@@ -32,16 +32,19 @@
     }
   },
   "data": {
-    "max_texts": 26000000,
-    "max_texts_per_dataset": 15000000,
+    "max_texts": 3000000,
+    "max_texts_per_dataset": 3000000,
     "train_split_ratio": 0.95,
     "pretokenize": true,
     "progressive_block_sizes": [[0, 1024], [2000, 1024]]
   },
   "datasets": [
     {
-      "name": "CATIE-AQ/wikipedia_fr_2022",
-      "text_key": "text"
+      "name": "HuggingFaceFW/fineweb-2",
+      "subset": "fra_Latn",
+      "text_key": "text",
+      "max_texts": 3000000,
+      "streaming": true
     }
   ]
 }
