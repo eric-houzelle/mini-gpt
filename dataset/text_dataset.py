@@ -3,6 +3,8 @@ import torch
 import os
 import json
 import hashlib
+import struct
+import array as _array
 import multiprocessing
 from functools import partial
 from tqdm import tqdm
@@ -51,11 +53,34 @@ class LazyTextDataset(Dataset):
         return x, y
 
 
+def _write_chunk_binary(out_file, chunk):
+    """Write a single chunk as [uint32 length][uint32[] token IDs]."""
+    out_file.write(struct.pack('<I', len(chunk)))
+    out_file.write(_array.array('I', chunk).tobytes())
+
+
+def _read_binary_chunks(path):
+    """Read all token chunks from a binary cache file."""
+    chunks = []
+    header_size = struct.calcsize('<I')
+    with open(path, "rb") as f:
+        while True:
+            header = f.read(header_size)
+            if len(header) < header_size:
+                break
+            n = struct.unpack('<I', header)[0]
+            data = f.read(n * 4)
+            a = _array.array('I')
+            a.frombytes(data)
+            chunks.append(a.tolist())
+    return chunks
+
+
 def _tokenize_worker(args):
     """Worker function for parallel tokenization.
 
     Reads texts from a shard file on disk (no RAM duplication),
-    tokenizes them, and writes token sequences to an output file.
+    tokenizes them, and writes token sequences to a binary output file.
     """
     worker_id, shard_path, output_path, tokenizer_name, block_size, batch_size = args
     from transformers import AutoTokenizer
@@ -64,7 +89,7 @@ def _tokenize_worker(args):
     count = 0
     batch = []
 
-    with open(output_path, "w") as out, open(shard_path, "r") as inp:
+    with open(output_path, "wb") as out, open(shard_path, "r") as inp:
         for line in inp:
             text = line.rstrip("\n")
             if not text:
@@ -83,7 +108,7 @@ def _tokenize_worker(args):
 
 
 def _tokenize_batch(tok, batch, block_size, out_file):
-    """Tokenize a batch of texts, chunk into block_size, write to file."""
+    """Tokenize a batch of texts, chunk into block_size, write binary to file."""
     encoded = tok(
         batch,
         add_special_tokens=True,
@@ -96,13 +121,13 @@ def _tokenize_batch(tok, batch, block_size, out_file):
         for start in range(0, len(ids), block_size):
             chunk = ids[start : start + block_size]
             if len(chunk) >= 2:
-                out_file.write(json.dumps(chunk) + "\n")
+                _write_chunk_binary(out_file, chunk)
                 count += 1
     return count
 
 
 def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache", batch_size=10_000):
-    """Tokenize in parallel across CPUs and stream to a JSONL cache file.
+    """Tokenize in parallel across CPUs and stream to a binary cache file.
 
     Writes text shards to disk first so workers don't duplicate RAM.
     On subsequent calls, loads from cache.
@@ -111,12 +136,17 @@ def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache", batch_si
     key = hashlib.sha256(
         f"{len(texts)}_{block_size}_{tokenizer.name_or_path}".encode()
     ).hexdigest()[:16]
-    cache_path = os.path.join(cache_dir, f"tokens_{key}.jsonl")
+    cache_path = os.path.join(cache_dir, f"tokens_{key}.bin")
+    legacy_path = os.path.join(cache_dir, f"tokens_{key}.jsonl")
 
     if os.path.exists(cache_path):
         print(f"♻️  Loading cached tokens from {cache_path}")
+        return _read_binary_chunks(cache_path)
+
+    if os.path.exists(legacy_path):
+        print(f"♻️  Loading cached tokens from {legacy_path} (legacy jsonl)")
         all_ids = []
-        with open(cache_path, "r") as f:
+        with open(legacy_path, "r") as f:
             for line in f:
                 all_ids.append(json.loads(line))
         return all_ids
@@ -144,7 +174,7 @@ def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache", batch_si
 
     worker_args = [
         (w, shard_paths[w],
-         os.path.join(cache_dir, f"_worker_{w}.jsonl"),
+         os.path.join(cache_dir, f"_worker_{w}.bin"),
          tokenizer.name_or_path, block_size, batch_size)
         for w in range(actual_workers)
     ]
@@ -159,18 +189,19 @@ def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache", batch_si
 
     tmp_path = cache_path + ".tmp"
     total_count = 0
-    all_ids = []
 
     print("📎 Merging worker outputs...")
-    with open(tmp_path, "w") as out:
+    with open(tmp_path, "wb") as out:
         for worker_file, count in results:
             total_count += count
-            with open(worker_file, "r") as inp:
-                for line in inp:
-                    out.write(line)
-                    all_ids.append(json.loads(line))
+            with open(worker_file, "rb") as inp:
+                while True:
+                    block = inp.read(1 << 20)
+                    if not block:
+                        break
+                    out.write(block)
             os.remove(worker_file)
 
     os.replace(tmp_path, cache_path)
     print(f"💾 Cached {total_count:,} sequences → {cache_path}")
-    return all_ids
+    return _read_binary_chunks(cache_path)

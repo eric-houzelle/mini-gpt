@@ -43,27 +43,27 @@
       "name": "HuggingFaceFW/fineweb-2",
       "subset": "fra_Latn",
       "text_key": "text",
-      "max_texts": 2000000,
+      "max_texts": 100000,
       "streaming": true
     },
     {
       "name": "uonlp/CulturaX",
       "subset": "fr",
       "text_key": "text",
-      "max_texts": 1000000,
+      "max_texts": 100000,
       "streaming": true
     },
     {
       "name": "allenai/c4",
       "subset": "fr",
       "text_key": "text",
-      "max_texts": 500000,
+      "max_texts": 100000,
       "streaming": true
     },
     {
       "name": "CATIE-AQ/wikipedia_fr_2022",
       "text_key": "text",
-      "max_texts": 500000,
+      "max_texts": 400000,
       "streaming": true
     }
   ]
