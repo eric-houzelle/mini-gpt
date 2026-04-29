@@ -410,7 +410,7 @@ def compute_val_loss():
     total, count = 0.0, 0
     for xb, yb in val_loader:
         xb, yb = xb.to(device), yb.to(device)
-        with torch.amp.autocast("cuda"):
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             logits = model(xb).logits
             B, T, C = logits.shape
             loss = loss_fn(logits.view(B * T, C), yb.view(B * T))
@@ -434,7 +434,7 @@ def generate_sample(prompt="Quelle est la capitale de la France ?"):
 
     input_ids = tokenizer.encode(text, return_tensors="pt").to(device)
 
-    with torch.amp.autocast("cuda"):
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
         output = model.generate(
             input_ids,
             max_new_tokens=150,
@@ -473,7 +473,7 @@ for epoch in range(start_epoch, num_epochs):
     for i, (xb, yb) in enumerate(train_loader):
         xb, yb = xb.to(device), yb.to(device)
 
-        with torch.amp.autocast("cuda"):
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             logits = model(xb).logits
             B, T, C = logits.shape
             loss = loss_fn(logits.view(B * T, C), yb.view(B * T))
