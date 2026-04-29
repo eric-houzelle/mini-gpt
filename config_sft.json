@@ -1,23 +1,33 @@
 {
   "training": {
-    "num_epochs": 3,
-    "batch_size": 32,
+    "num_epochs": 5,
+    "batch_size": 16,
     "learning_rate": 2e-5,
     "warmup": 200,
-    "gradient_accumulation_steps": 4,
+    "gradient_accumulation_steps": 8,
     "max_grad_norm": 1.0
   },
   "model": {
-    "embed_dim": 768,
+    "embed_dim": 1536,
     "depth": 14,
-    "heads": 12,
-    "num_kv_heads": 4,
-    "block_size": 256,
+    "heads": 24,
+    "num_kv_heads": 6,
+    "block_size": 512,
     "dropout": 0.05,
-    "hidden_dim": 3072,
-    "weight_sharing": "none",
+    "hidden_dim": 8192,
+    "weight_sharing": "recurrent_depth",
     "use_rope": true,
-    "use_gradient_checkpointing": false
+    "use_gradient_checkpointing": true,
+    "recurrent_depth": {
+      "num_prelude_layers": 4,
+      "num_coda_layers": 4,
+      "num_recurrent_steps": 8,
+      "use_lti_injection": true,
+      "use_act_halting": true,
+      "act_halt_threshold": 0.99,
+      "depth_lora_rank": 32,
+      "act_loss_weight": 0.01
+    }
   },
   "data": {
     "max_texts_per_dataset": 200000,
@@ -25,41 +35,57 @@
   },
   "datasets": [
     {
+      "name": "kurakurai/luth-sft",
+      "split": "luth_scholar",
+      "format": "conversations",
+      "conversations_key": "messages",
+      "max_texts": 30000
+    },
+    {
+      "name": "kurakurai/luth-sft",
+      "split": "luth_tulu3_persona_instruct",
+      "format": "conversations",
+      "conversations_key": "messages",
+      "max_texts": 20000
+    },
+    {
+      "name": "kurakurai/luth-sft",
+      "split": "luth_tulu3_persona_math",
+      "format": "conversations",
+      "conversations_key": "messages",
+      "max_texts": 20000
+    },
+    {
+      "name": "kurakurai/luth-sft",
+      "split": "luth_smoltalk2",
+      "format": "conversations",
+      "conversations_key": "messages",
+      "max_texts": 20000
+    },
+    {
+      "name": "kurakurai/luth-sft",
+      "split": "luth_openhermes",
+      "format": "conversations",
+      "conversations_key": "messages",
+      "max_texts": 30000
+    },
+    {
       "name": "Houzeric/everyday-conversations",
       "format": "flat",
       "user_key": "user",
       "assistant_key": "assistant"
     },
     {
-      "name": "CATIE-AQ/facebook-community-alignment-dataset_french_conversation",
-      "format": "conversations",
-      "conversations_key": "conversation"
-    },
-    {
       "name": "angeluriot/french_instruct",
       "format": "conversations",
       "conversations_key": "conversation",
-      "max_texts": 40000,
+      "max_texts": 20000,
       "filter_column": "source",
       "exclude_values": [
         "Logic Inference OA (translated)",
         "Evol Instruct (translated)",
         "Human ChatGPT Comparison Corpus (translated)"
       ]
-    },
-    {
-      "name": "jpacifico/French-Alpaca-dataset-Instruct-55K",
-      "format": "alpaca",
-      "max_texts": 20000
-    },
-    {
-      "name": "Houzeric/french-prompts-and-questions",
-      "format": "flat",
-      "user_key": "prompt",
-      "assistant_key": "answer",
-      "max_texts": 15000,
-      "filter_column": "type",
-      "include_values": ["human_chatgpt"]
     },
     {
       "name": "Houzeric/physics-FR-qa-dataset",

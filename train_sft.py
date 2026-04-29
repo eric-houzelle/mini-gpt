@@ -165,16 +165,22 @@ def load_single_dataset(ds_cfg):
     """Load one dataset entry from the config and return (user, assistant) pairs."""
     name = ds_cfg["name"]
     subset = ds_cfg.get("subset")
+    split = ds_cfg.get("split", "train")
     fmt = ds_cfg.get("format", "flat")
     lang = ds_cfg.get("language_filter")
     max_n = ds_cfg.get("max_texts", max_texts_per_ds)
 
-    print(f"[{now()}]  → Loading {name}" + (f" [{subset}]" if subset else ""))
+    label = f"[{now()}]  → Loading {name}"
+    if subset:
+        label += f" [{subset}]"
+    if split != "train":
+        label += f" (split={split})"
+    print(label)
 
     if subset:
-        ds = load_dataset(name, subset, split="train")
+        ds = load_dataset(name, subset, split=split)
     else:
-        ds = load_dataset(name, split="train")
+        ds = load_dataset(name, split=split)
 
     if lang:
         lang_col = "language" if "language" in ds.column_names else "lang"
