@@ -112,7 +112,8 @@ def _tokenize_batch(tok, batch, block_size, out_file):
     encoded = tok(
         batch,
         add_special_tokens=True,
-        truncation=False,
+        truncation=True,
+        max_length=block_size * 4,
         padding=False,
         return_attention_mask=False,
     )["input_ids"]
@@ -162,9 +163,10 @@ def pretokenize_cached(texts, tokenizer, block_size, cache_dir="cache", batch_si
         if start >= len(texts):
             break
         shard_path = os.path.join(cache_dir, f"_shard_{w}.txt")
+        max_chars = block_size * 8
         with open(shard_path, "w") as f:
             for t in texts[start:end]:
-                f.write(t.replace("\n", " ") + "\n")
+                f.write(t.replace("\n", " ")[:max_chars] + "\n")
         shard_paths.append(shard_path)
 
     actual_workers = len(shard_paths)
