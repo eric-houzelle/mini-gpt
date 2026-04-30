@@ -537,9 +537,17 @@ for epoch in range(start_epoch, num_epochs):
                     step=global_step,
                 )
 
-                response = generate_sample()
-                print(f"[{now()}] 💬 Exemple: Q='Quelle est la capitale de la France ?'")
-                print(f"   R: {response}")
+                test_prompts = [
+                    "Quelle est la capitale de la France ?",
+                    "Explique-moi ce qu'est la gravité.",
+                    "Résous : 2x + 5 = 15",
+                    "Quels sont les avantages de l'énergie solaire ?",
+                    "Raconte-moi l'histoire de la Révolution française en bref.",
+                ]
+                for prompt in test_prompts:
+                    response = generate_sample(prompt)
+                    print(f"[{now()}] 💬 Q='{prompt}'")
+                    print(f"   R: {response}")
 
                 model.train()
 

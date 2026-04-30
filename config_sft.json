@@ -1,6 +1,6 @@
 {
   "training": {
-    "num_epochs": 5,
+    "num_epochs": 15,
     "batch_size": 16,
     "learning_rate": 2e-5,
     "warmup": 200,
@@ -53,7 +53,7 @@
       "split": "luth_tulu3_persona_math",
       "format": "conversations",
       "conversations_key": "messages",
-      "max_texts": 20000
+      "max_texts": 47000
     },
     {
       "name": "kurakurai/luth-sft",
@@ -67,7 +67,7 @@
       "split": "luth_openhermes",
       "format": "conversations",
       "conversations_key": "messages",
-      "max_texts": 30000
+      "max_texts": 80000
     },
     {
       "name": "Houzeric/everyday-conversations",
