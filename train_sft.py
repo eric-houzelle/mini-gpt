@@ -400,6 +400,11 @@ if os.path.exists(SFT_SAVE_PATH):
     global_step = sft_ckpt.get("global_step", 0)
     print(f"[{now()}] Resumed SFT from epoch {start_epoch}, step {global_step}, best_loss={best_loss:.4f}")
 
+override = os.environ.get("OVERRIDE_BEST_LOSS")
+if override is not None:
+    best_loss = float(override)
+    print(f"[{now()}] OVERRIDE_BEST_LOSS={best_loss}")
+
 
 # ---------------------------------------------------------------------------
 # Validation
